@@ -1,0 +1,13 @@
+{
+  "name": "@zima-control-center/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@zima-control-center/core": "0.1.0",
+    "@zima-control-center/zimaos-adapter": "0.1.0"
+  }
+}

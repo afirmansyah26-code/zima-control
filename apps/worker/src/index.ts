@@ -1,0 +1,1 @@
+console.log("Zima Control Center worker");
