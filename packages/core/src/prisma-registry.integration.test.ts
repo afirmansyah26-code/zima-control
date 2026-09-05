@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { PrismaClient } from "@prisma/client";
 import { after, before, beforeEach, test } from "node:test";
 import { DiscoveryService } from "./discovery-service.js";
+import { ApplicationRegistryService } from "./application-registry-service.js";
+import { InMemoryRegistryRepository } from "./in-memory-registry-repository.js";
 import { normalizeApplication } from "./normalizer.js";
 import { PrismaRegistryRepository } from "./prisma-registry-repository.js";
 import { RegistryError } from "./registry-errors.js";
@@ -392,6 +394,82 @@ services:
     assert.doesNotMatch(firstNormalized.deployment.sourceHash, new RegExp(secret));
     assert.doesNotMatch(persisted.sourceContext ?? "", new RegExp(secret));
   }
+});
+
+test("Prisma and InMemory repositories expose equivalent safe read semantics", async () => {
+  const input = application({
+    runtime: runtime([{
+      id: "read-container",
+      name: "demo-web-1",
+      image: "example/demo:1",
+      serviceName: "web",
+      state: "running",
+      status: "Up",
+    }]),
+  });
+  const yaml = `
+name: demo
+services:
+  web:
+    image: example/demo:1
+    ports: ["8080:80"]
+    volumes: [./data:/var/lib/demo]
+    networks: [public]
+    environment:
+      API_TOKEN: prisma-secret-value
+      APP_MODE: production
+networks:
+  public:
+    external: true
+`;
+  const value = normalized(input, yaml);
+  const observedAt = new Date("2026-01-01T00:00:00.000Z");
+  await repository.reconcileApplication(value, observedAt);
+  const inMemory = new InMemoryRegistryRepository();
+  await inMemory.reconcileApplication(value, observedAt);
+
+  const prismaApplication = await prisma.application.findUniqueOrThrow({
+    where: { name: "demo" },
+    select: { id: true },
+  });
+  const prismaDetail = await new ApplicationRegistryService(repository)
+    .getApplicationDetail(prismaApplication.id);
+  const memoryApplication = (await inMemory.listApplications())[0];
+  assert.ok(memoryApplication);
+  const memoryDetail = await new ApplicationRegistryService(inMemory)
+    .getApplicationDetail(memoryApplication.id);
+
+  assert.deepEqual(prismaDetail.application.name, memoryDetail.application.name);
+  assert.deepEqual(prismaDetail.currentDeployment?.composeName, memoryDetail.currentDeployment?.composeName);
+  assert.deepEqual(prismaDetail.services.map(({ name, ports, volumes, networks, environmentMetadata }) => ({
+    name,
+    ports,
+    volumes,
+    networks,
+    environmentMetadata,
+  })), memoryDetail.services.map(({ name, ports, volumes, networks, environmentMetadata }) => ({
+    name,
+    ports,
+    volumes,
+    networks,
+    environmentMetadata,
+  })));
+  assert.deepEqual(prismaDetail.runtimeContainers.map(({ serviceName, containerId, image, state, status }) => ({
+    serviceName,
+    containerId,
+    image,
+    state,
+    status,
+  })), memoryDetail.runtimeContainers.map(({ serviceName, containerId, image, state, status }) => ({
+    serviceName,
+    containerId,
+    image,
+    state,
+    status,
+  })));
+  assert.deepEqual(prismaDetail.freshness, memoryDetail.freshness);
+  assert.equal("composeYamlRedacted" in (prismaDetail.currentDeployment ?? {}), false);
+  assert.doesNotMatch(JSON.stringify(prismaDetail), /prisma-secret-value/);
 });
 
 async function createSchema(client: PrismaClient): Promise<void> {

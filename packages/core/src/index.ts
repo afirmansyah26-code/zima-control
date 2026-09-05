@@ -6,15 +6,51 @@ export type {
 	InstalledApplicationSource,
 } from "./discovery-service.js";
 export { InMemoryRegistryRepository } from "./in-memory-registry-repository.js";
+export {
+  ApplicationRegistryService,
+  ApplicationRegistryServiceError,
+} from "./application-registry-service.js";
+export type {
+  ApplicationDetail,
+  ApplicationDeploymentView,
+  ApplicationEnvironmentMetadataRecord,
+  ApplicationEnvironmentMetadataView,
+  ApplicationFreshness,
+  ApplicationListOptions,
+  ApplicationNetworkRecord,
+  ApplicationNetworkView,
+  ApplicationPortRecord,
+  ApplicationPortView,
+  ApplicationRuntimeContainerView,
+  ApplicationServiceView,
+  ApplicationSummary,
+  ApplicationRegistryServiceErrorCode,
+  ApplicationVolumeRecord,
+  ApplicationVolumeView,
+} from "./application-registry-service.js";
 export { normalizeApplication, normalizeApplicationCandidate, normalizeName, normalizeStatus } from "./normalizer.js";
 export { PrismaRegistryRepository } from "./prisma-registry-repository.js";
 export { RegistryError } from "./registry-errors.js";
 export type { RegistryErrorCode } from "./registry-errors.js";
 export type {
-	RegistryApplicationRecord,
-	RegistryDeploymentRecord,
-	RegistryRepository,
+  RegistryApplicationRecord,
+  RegistryDeploymentRecord,
+  RegistryReadRepository,
+  RegistryRepository,
 } from "./registry-repository.js";
+export type {
+  RegistryApplicationListOptions,
+  RegistryApplicationReadRecord,
+  RegistryApplicationSnapshotReadRecord,
+  RegistryDeploymentReadRecord,
+  RegistryEnvironmentMetadataReadRecord,
+  RegistryNetworkReadRecord,
+  RegistryPortReadRecord,
+  RegistryRuntimeContainerReadRecord,
+  RegistryServiceReadRecord,
+  RegistryServiceSnapshotReadRecord,
+  RegistryVolumeReadRecord,
+} from "./registry-read-types.js";
 export {
 	classifySecretKey,
 	redactSecretValue,
