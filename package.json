@@ -7,10 +7,16 @@
     "packages/*"
   ],
   "scripts": {
-    "typecheck": "npm run typecheck --workspaces"
+    "typecheck": "npm run typecheck --workspaces",
+    "test": "npm run test --workspaces --if-present"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "prisma": "^6.19.0",
+    "tsx": "^4.20.6",
     "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.0"
   }
 }

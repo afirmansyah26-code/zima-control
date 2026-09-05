@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test src/index.test.ts"
   },
   "dependencies": {
+    "@prisma/client": "^6.19.0",
     "@zima-control-center/core": "0.1.0",
     "@zima-control-center/zimaos-adapter": "0.1.0"
   }
