@@ -1,0 +1,21 @@
+{
+  "name": "@zima-control-center/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "tsx --test src/app.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@zima-control-center/application-registry-contracts": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^28.0.3",
+    "jsdom": "^29.1.1",
+    "vite": "^8.2.2"
+  }
+}
