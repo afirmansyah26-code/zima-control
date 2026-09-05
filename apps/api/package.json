@@ -1,0 +1,17 @@
+{
+  "name": "@zima-control-center/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test src/application.test.ts"
+  },
+  "dependencies": {
+    "@zima-control-center/core": "0.1.0",
+    "hono": "^4.13.5"
+  }
+}
