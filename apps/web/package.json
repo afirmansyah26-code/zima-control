@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "tsc --noEmit -p tsconfig.json && vite build",
     "preview": "vite preview",
     "test": "tsx --test src/app.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"

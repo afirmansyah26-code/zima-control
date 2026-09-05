@@ -32,18 +32,38 @@ export type ApplicationRegistryReadService = Pick<
   | "getApplicationEnvironmentMetadata"
 >;
 
+export interface ApplicationRegistryApiOptions {
+  readiness?: () => Promise<boolean>;
+}
+
 /**
  * Creates the transport-only HTTP application. Infrastructure composition
  * supplies the already-configured read service; this package never imports
  * Prisma, an adapter, or a discovery implementation.
  */
-export function createApplicationRegistryApi(service: ApplicationRegistryReadService): Hono {
+export function createApplicationRegistryApi(
+  service: ApplicationRegistryReadService,
+  options: ApplicationRegistryApiOptions = {},
+): Hono {
   const app = new Hono();
 
-  app.use("/api/*", async (context, next) => {
+  app.use("*", async (context, next) => {
     context.header("Cache-Control", "no-store");
     context.header("X-Content-Type-Options", "nosniff");
     await next();
+  });
+
+  app.get("/health", (context) => context.json({ status: "ok", service: "api" }));
+
+  app.get("/ready", async (context) => {
+    try {
+      const ready = await (options.readiness?.() ?? Promise.resolve(true));
+      return ready
+        ? context.json({ status: "ready", service: "api" })
+        : context.json({ status: "not_ready", service: "api" }, 503);
+    } catch {
+      return context.json({ status: "not_ready", service: "api" }, 503);
+    }
   });
 
   app.get("/api/applications", async (context) => {

@@ -7,7 +7,11 @@
     "packages/*"
   ],
   "scripts": {
+    "build:packages": "npm run build --workspace=@zima-control-center/application-registry-contracts && npm run build --workspace=@zima-control-center/core && npm run build --workspace=@zima-control-center/zimaos-adapter",
+    "build": "npm run build:packages && npm run build --workspace=@zima-control-center/api && npm run build --workspace=@zima-control-center/worker && npm run build --workspace=@zima-control-center/web",
+    "pretypecheck": "npm run build:packages",
     "typecheck": "npm run typecheck --workspaces",
+    "pretest": "npm run build",
     "test": "npm run test --workspaces --if-present"
   },
   "devDependencies": {

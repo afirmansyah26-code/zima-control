@@ -1,5 +1,27 @@
 export { createApplicationRegistryApi } from "./application.js";
-export type { ApplicationRegistryReadService } from "./application.js";
+export type {
+  ApplicationRegistryApiOptions,
+  ApplicationRegistryReadService,
+} from "./application.js";
+export {
+  ApiRuntimeConfigError,
+  composeApplicationRegistryApi,
+  createApiRuntime,
+  readApiRuntimeConfig,
+} from "./runtime.js";
+export type {
+  ApiRuntime,
+  ApiRuntimeConfig,
+  EnvironmentSource,
+} from "./runtime.js";
+export {
+  runApiProcess,
+  startApiServer,
+} from "./start.js";
+export type {
+  ApiRuntimeFactory,
+  ApiServerHandle,
+} from "./start.js";
 export type {
   ApiErrorCode,
   ApiErrorResponse,

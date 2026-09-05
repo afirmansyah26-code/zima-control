@@ -11,6 +11,7 @@ import {
   normalizeApiBaseUrl,
   type FetchImplementation,
 } from "./registry-api.js";
+import { createSafeConfigurationError, readWebRuntimeConfig } from "./runtime.js";
 
 const now = new Date("2026-09-05T12:00:00.000Z");
 const safeTimestamp = "2026-09-05T11:55:00.000Z";
@@ -343,6 +344,39 @@ test("API base URL configuration allows HTTP origins without credentials", () =>
   assert.equal(normalizeApiBaseUrl("https://api.example.test/registry/"), "https://api.example.test/registry");
   assert.throws(() => normalizeApiBaseUrl("javascript:alert(1)"), /configuration is invalid/);
   assert.throws(() => normalizeApiBaseUrl("https://user:password@example.test"), /configuration is invalid/);
+});
+
+test("registry client uses same-origin API paths by default", async () => {
+  const requests: string[] = [];
+  const client = createRegistryApiClient({
+    fetchImplementation: async (input) => {
+      requests.push(typeof input === "string" ? input : input.toString());
+      return json([]);
+    },
+  });
+
+  await client.listApplications();
+  assert.deepEqual(requests, ["/api/applications"]);
+});
+
+test("API base URL rejects server secrets, query strings, and fragments", () => {
+  assert.throws(() => normalizeApiBaseUrl("file:/data/registry.db"), /configuration is invalid/);
+  assert.throws(() => normalizeApiBaseUrl("https://api.example.test/?token=secret"), /configuration is invalid/);
+  assert.throws(() => normalizeApiBaseUrl("https://api.example.test/#secret"), /configuration is invalid/);
+});
+
+test("web runtime defaults to same-origin and renders a fixed configuration failure", () => {
+  assert.deepEqual(readWebRuntimeConfig(undefined), { apiBaseUrl: "" });
+  assert.throws(
+    () => readWebRuntimeConfig("https://user:do-not-return@example.test"),
+    (error) => error instanceof Error && !error.message.includes("do-not-return"),
+  );
+
+  const { dom } = setup();
+  const error = createSafeConfigurationError(dom.window.document);
+  assert.equal(error.getAttribute("role"), "alert");
+  assert.match(error.textContent ?? "", /configuration is invalid/);
+  assert.doesNotMatch(error.textContent ?? "", /do-not-return|password|token/i);
 });
 
 async function waitFor(predicate: () => boolean): Promise<void> {

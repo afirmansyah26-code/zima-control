@@ -3,14 +3,24 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/start.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx --test src/application.test.ts"
+    "test": "tsx --test src/application.test.ts src/runtime.test.ts"
   },
   "dependencies": {
+    "@hono/node-server": "^2.1.1",
+    "@prisma/client": "^6.19.0",
     "@zima-control-center/application-registry-contracts": "0.1.0",
     "@zima-control-center/core": "0.1.0",
     "hono": "^4.13.5"

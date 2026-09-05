@@ -1,0 +1,21 @@
+FROM node:22-alpine AS build
+
+WORKDIR /workspace
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/worker/package.json apps/worker/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY packages/application-registry-contracts/package.json packages/application-registry-contracts/package.json
+COPY packages/core/package.json packages/core/package.json
+COPY packages/zimaos-adapter/package.json packages/zimaos-adapter/package.json
+COPY prisma/schema.prisma prisma/schema.prisma
+RUN npm ci
+COPY apps/web apps/web
+COPY packages/application-registry-contracts packages/application-registry-contracts
+RUN npm run build --workspace=@zima-control-center/application-registry-contracts \
+    && npm run build --workspace=@zima-control-center/web
+
+FROM nginx:1.29-alpine AS runtime
+COPY deployment/nginx/default.conf.template /etc/nginx/templates/default.conf.template
+COPY --from=build /workspace/apps/web/dist /usr/share/nginx/html
+EXPOSE 8080

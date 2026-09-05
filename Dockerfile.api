@@ -1,0 +1,34 @@
+FROM node:22-alpine AS build
+
+WORKDIR /workspace
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/worker/package.json apps/worker/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY packages/application-registry-contracts/package.json packages/application-registry-contracts/package.json
+COPY packages/core/package.json packages/core/package.json
+COPY packages/zimaos-adapter/package.json packages/zimaos-adapter/package.json
+COPY prisma/schema.prisma prisma/schema.prisma
+RUN npm ci
+COPY apps/api apps/api
+COPY packages/application-registry-contracts packages/application-registry-contracts
+COPY packages/core packages/core
+RUN npx prisma generate
+RUN npm run build --workspace=@zima-control-center/application-registry-contracts \
+    && npm run build --workspace=@zima-control-center/core \
+    && npm run build --workspace=@zima-control-center/api
+RUN npm prune --omit=dev --omit=optional
+
+FROM node:22-alpine AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+COPY --from=build --chown=node:node /workspace/node_modules ./node_modules
+COPY --from=build --chown=node:node /workspace/package.json ./package.json
+COPY --from=build --chown=node:node /workspace/apps/api/package.json ./apps/api/package.json
+COPY --from=build --chown=node:node /workspace/apps/api/dist ./apps/api/dist
+COPY --from=build --chown=node:node /workspace/packages/core/package.json ./packages/core/package.json
+COPY --from=build --chown=node:node /workspace/packages/core/dist ./packages/core/dist
+COPY --from=build --chown=node:node /workspace/packages/application-registry-contracts/package.json ./packages/application-registry-contracts/package.json
+COPY --from=build --chown=node:node /workspace/packages/application-registry-contracts/dist ./packages/application-registry-contracts/dist
+USER node
+CMD ["node", "apps/api/dist/start.js"]
