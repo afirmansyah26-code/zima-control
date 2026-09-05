@@ -2,15 +2,30 @@
 
 ## Status
 
-**Design draft - documentation only.**
+**Implemented and finalized for the current Milestone 1A.2 schema checkpoint.**
 
-Milestone 1A.1.1 - Project packages is completed. The Prisma schema is not implemented in this milestone. The current `prisma/schema.prisma` contains only a SQLite datasource and a Prisma client generator; it contains no Application Registry model.
+Milestone 1A.1.1 - Project packages is completed. The Prisma Application Registry schema is implemented in `prisma/schema.prisma` with a SQLite datasource, the `prisma-client-js` generator, and exactly eight Application Registry models.
 
-This document is the implementation blueprint for a future Prisma schema. It does not change `prisma/schema.prisma`, create a migration, or claim that Milestone 1A.2 implementation is complete.
+This document is the implementation blueprint and contract for `prisma/schema.prisma`. It does not create a migration or perform any database operation.
+
+## Implementation Status
+
+1A.2 Prisma implementation: Completed
+
+The eight Application Registry models are implemented in `prisma/schema.prisma`. Validation completed with:
+
+- `npx --yes prisma@6.19.0 format`
+- `DATABASE_URL=file:./validation-only.db npx --yes prisma@6.19.0 validate`
+
+The schema validated successfully. `DATABASE_URL` was supplied only for the validation process; no database was created or accessed.
+
+The finalized implementation uses `String @id @default(uuid())` for every model ID, a unique `Application.name`, nullable unique `Application.zimaosAppId`, unique `ApplicationDeployment.applicationId`, composite unique service and environment identities, and unique `RuntimeContainer.containerId`. Child snapshot relations use `onDelete: Cascade`; foreign-key relations use `onUpdate: Restrict`. The root `Application -> ApplicationDeployment` delete policy remains unresolved and is intentionally not encoded with an explicit `onDelete`.
+
+The schema uses default Prisma model/table naming and camelCase fields without `@map` or `@@map`. It contains no deployment-history, runtime-history, backup, restore, scheduler, or secret-backend models.
 
 ## Objective
 
-Define a clear, normalized internal schema for the Zima Control Center Application Registry before the Prisma implementation begins.
+Define and record the normalized internal schema for the Zima Control Center Application Registry, including the implementation choices and the decisions that remain deferred.
 
 The registry represents applications discovered from ZimaOS and Docker/runtime sources. It is owned by Zima Control Center and does not replace the source data or management responsibility of ZimaOS.
 
@@ -122,28 +137,28 @@ Examples from the design documents include `sisfov2`, SISFO, Cashflow, ADMS, Kol
 
 | Field | Conceptual type | Nullability / status | Uniqueness and index | Source of truth | Purpose |
 | --- | --- | --- | --- | --- | --- |
-| `id` | String-like internal identifier | Non-null as primary key | Primary key | Zima Control Center | Stable internal identity and parent key for registry relations |
-| `name` | String | Non-null for a usable application identity | `UNIQUE` is explicitly defined by the ERD; therefore also provides a lookup index | Normalized application identity, usually based on ZimaOS name | Stable internal name used for lookup and display-independent identity |
-| `display_name` | String | **Decision Required** | No uniqueness is defined | Normalized ZimaOS title/name | Human-readable label; must not replace `name` as identity |
-| `resource_type` | String or enum-like value | **Decision Required** | No index is defined | Normalized classification using ZimaOS metadata and project rules | Distinguishes application/infrastructure resources |
-| `runtime` | String or enum-like value | **Decision Required**; examples use `docker` | No index is defined | Runtime discovery and normalized model | Records the runtime represented by the registry record |
-| `status` | String or enum-like value | Canonical status is expected; initial/unknown handling is **Decision Required** | A non-unique status index is recommended; physical index is **Decision Required** | Normalized status from discovery, not a raw value copied without mapping | Supports statuses such as `RUNNING`, `STOPPED`, `DEGRADED`, `ERROR`, and `UNKNOWN` |
-| `managed_by` | String or enum-like value | Classification is expected; defaulting behavior is **Decision Required** | No uniqueness is defined | Normalized ownership classification | Records `ZIMAOS`, `EXTERNAL`, or `UNKNOWN` |
-| `zimaos_app_id` | String | Nullable because not every resource is guaranteed to have a ZimaOS ID | Lookup index recommended; uniqueness is **Decision Required** | ZimaOS application `id` when available | Keeps external ZimaOS identity separate from the internal application name |
-| `zimaos_store_app_id` | String | Nullable | No uniqueness or index is defined | ZimaOS store/catalog metadata when available | Retains the separate store application reference shown in the ERD |
-| `is_uncontrolled` | Boolean | Whether nullable or defaulted is **Decision Required** | No uniqueness is defined | ZimaOS installed application metadata | Preserves the ZimaOS uncontrolled/infrastructure distinction |
-| `last_discovered_at` | DateTime-like instant | Nullable before the first successful discovery | An index is not required by the source design | Zima Control Center discovery process | Records the latest successful discovery time |
-| `created_at` | DateTime-like instant | **Decision Required**; not present in the ERD fields | No source index defined | Zima Control Center | Records registry creation time if lifecycle timestamps are adopted |
-| `updated_at` | DateTime-like instant | **Decision Required**; not present in the ERD fields | No source index defined | Zima Control Center | Records the latest internal record update if lifecycle timestamps are adopted |
+| `id` | `String @id @default(uuid())` | Non-null as primary key | Primary key | Zima Control Center | Stable internal identity and parent key for registry relations |
+| `name` | `String` | Non-null for a usable application identity | `@unique`; also provides a lookup index | Normalized application identity, usually based on ZimaOS name | Stable internal name used for lookup and display-independent identity |
+| `display_name` | `String?` | Nullable | No uniqueness is defined | Normalized ZimaOS title/name | Human-readable label; must not replace `name` as identity |
+| `resource_type` | `String?` | Nullable | No index is defined | Normalized classification using ZimaOS metadata and project rules | Distinguishes application/infrastructure resources |
+| `runtime` | `String?` | Nullable | No index is defined | Runtime discovery and normalized model | Records the runtime represented by the registry record |
+| `status` | `String?` | Nullable | Index on `status` | Normalized status from discovery, not a raw value copied without mapping | Supports statuses such as `RUNNING`, `STOPPED`, `DEGRADED`, `ERROR`, and `UNKNOWN` |
+| `managed_by` | `String?` | Nullable | No uniqueness is defined | Normalized ownership classification | Records `ZIMAOS`, `EXTERNAL`, or `UNKNOWN` |
+| `zimaos_app_id` | `String? @unique` | Nullable because not every resource is guaranteed to have a ZimaOS ID | Nullable unique constraint; also provides lookup support | ZimaOS application `id` when available | Keeps external ZimaOS identity separate from the internal application name |
+| `zimaos_store_app_id` | `String?` | Nullable | No uniqueness or index is defined | ZimaOS store/catalog metadata when available | Retains the separate store application reference shown in the ERD |
+| `is_uncontrolled` | `Boolean?` | Nullable | No uniqueness is defined | ZimaOS installed application metadata | Preserves the ZimaOS uncontrolled/infrastructure distinction |
+| `last_discovered_at` | `DateTime?` | Nullable before the first successful discovery | No index | Zima Control Center discovery process | Records the latest successful discovery time |
+| `created_at` | `DateTime @default(now())` | Non-null | No index | Zima Control Center | Records registry creation time |
+| `updated_at` | `DateTime @updatedAt` | Non-null | No index | Zima Control Center | Records the latest persisted Application update |
 
-The field names above use the terminology from the ERD. Physical naming such as `createdAt` versus `created_at` is addressed in [Prisma Implementation Notes](#prisma-implementation-notes).
+The field names above use the terminology from the ERD; the finalized Prisma fields use camelCase names such as `createdAt` and `updatedAt`, with `createdAt` generated by `@default(now())` and `updatedAt` maintained by `@updatedAt`.
 
 ### Constraints
 
 - `id` is the internal primary key.
 - `name` is unique according to the ERD.
 - `zimaos_app_id` must remain separate from `name`.
-- The ERD does not explicitly define `zimaos_app_id` as unique. A unique constraint would support idempotent upsert by external identity, but it is a **Decision Required** rather than an assumed constraint.
+- `zimaos_app_id` is nullable and unique in the finalized schema, so a supplied external identity can support idempotent discovery without replacing the internal name.
 - A missing ZimaOS ID must not force the internal `name` to become a fabricated external ID.
 - Discovery failure must not automatically rewrite a known application to `STOPPED`; the ERD explicitly separates discovery status from runtime status.
 
@@ -173,16 +188,16 @@ The ERD specifically describes the record as the latest successfully read snapsh
 
 | Field | Conceptual type | Nullability / status | Uniqueness and index | Source of truth | Purpose |
 | --- | --- | --- | --- | --- | --- |
-| `id` | String-like internal identifier | Non-null as primary key | Primary key | Zima Control Center | Stable deployment record identity |
-| `application_id` | String-like foreign key | Non-null | `UNIQUE` is explicitly shown in the ERD; this enforces one current deployment per application | `Application.id` | Links the current deployment to its application |
-| `compose_name` | String | Required for a complete Compose snapshot; partial-record behavior is **Decision Required** | No additional uniqueness is defined | Compose/application name from ZimaOS | Identifies the Compose deployment being represented |
-| `compose_yaml_redacted` | Text-like string | Required for a complete snapshot; whether a partial deployment row may omit it is **Decision Required** | No index is required by the source design | Sanitized ZimaOS Compose response | Retains deployment context without secret plaintext |
-| `source_context` | String path or context identifier | Nullable unless the Compose response provides it | No index is defined | Compose build/source metadata | Records the build context or deployment source path |
-| `dockerfile_path` | String path | Nullable when the deployment uses an image or does not expose a Dockerfile | No index is defined | Compose build metadata | Records the Dockerfile path when available |
-| `source_hash` | String | Nullable until a sanitized normalized snapshot can be hashed | An index is not required for the documented change-detection query | Normalized sanitized deployment representation | Detects whether the current desired deployment changed |
-| `discovered_at` | DateTime-like instant | Non-null for a completed snapshot | Time index is **Decision Required** | Zima Control Center discovery process | Records when this deployment snapshot was obtained |
+| `id` | `String @id @default(uuid())` | Non-null as primary key | Primary key | Zima Control Center | Stable deployment record identity |
+| `application_id` | `String` foreign key | Non-null | `UNIQUE` in the finalized schema; this enforces one current deployment per application | `Application.id` | Links the current deployment to its application |
+| `compose_name` | `String` | Non-null | No additional uniqueness is defined | Compose/application name from ZimaOS | Identifies the Compose deployment being represented |
+| `compose_yaml_redacted` | `String` | Non-null | No index | Sanitized ZimaOS Compose response | Retains deployment context without secret plaintext |
+| `source_context` | `String?` | Nullable | No index | Compose build/source metadata | Records the build context or deployment source path |
+| `dockerfile_path` | `String?` | Nullable | No index | Compose build metadata | Records the Dockerfile path when available |
+| `source_hash` | `String?` | Nullable | No index | Normalized sanitized deployment representation | Detects whether the current desired deployment changed |
+| `discovered_at` | `DateTime` | Non-null | No index | Zima Control Center discovery process | Records when this deployment snapshot was obtained |
 
-The Blueprint uses names such as `compose_yaml` and `captured_at`, while the ERD uses `compose_yaml_redacted` and `discovered_at`. The ERD naming is safer for secret handling. Whether the two timestamp names should be unified is an **Open Question**.
+The Blueprint uses historical names such as `compose_yaml` and `captured_at`, while the finalized schema uses `composeYamlRedacted` and `discoveredAt` to make redaction and discovery semantics explicit.
 
 ### Constraints
 
@@ -190,7 +205,7 @@ The Blueprint uses names such as `compose_yaml` and `captured_at`, while the ERD
 - `application_id` is unique in the current design, making this the current deployment rather than a history table.
 - `compose_yaml_redacted` must not contain raw secret values.
 - `source_hash` must be calculated from sanitized and normalized deployment data, not from secret plaintext.
-- The source documents do not define whether a deployment is physically replaced, updated in place, or versioned when `source_hash` changes. The current ERD says to replace the current deployment snapshot; historical retention is **Decision Required**.
+- The current deployment snapshot is replaced or updated according to the discovery application layer; deployment history remains deferred.
 
 ### ZimaOS Mapping
 
@@ -217,20 +232,20 @@ The endpoint path uses an application name. The exact matching rule between the 
 
 | Field | Conceptual type | Nullability / status | Uniqueness and index | Source of truth | Purpose |
 | --- | --- | --- | --- | --- | --- |
-| `id` | String-like internal identifier | Non-null as primary key | Primary key | Zima Control Center | Stable service record identity |
-| `deployment_id` | String-like foreign key | Non-null | Index recommended for listing services; physical index is **Decision Required** | `ApplicationDeployment.id` | Links the service to one deployment |
-| `name` | String | Non-null for a Compose service | Uniqueness within a deployment is **Decision Required**; global uniqueness is not supported by the design | Compose service key | Identifies the service within its Compose deployment |
-| `container_name` | String | Nullable because Compose may not declare one | No global uniqueness is defined | Compose service definition | Records desired/static `container_name`, if declared |
-| `image` | String | Nullable because the service may use `build` instead | No uniqueness is defined | Compose service definition | Records desired image when the service uses an image |
-| `build_context` | String path or context identifier | Nullable because the service may use `image` instead | No index is defined | Compose build definition | Records build context when the service is built |
+| `id` | `String @id @default(uuid())` | Non-null as primary key | Primary key | Zima Control Center | Stable service record identity |
+| `deployment_id` | `String` foreign key | Non-null | Covered by the finalized composite unique constraint with `name` | `ApplicationDeployment.id` | Links the service to one deployment |
+| `name` | `String` | Non-null for a Compose service | `UNIQUE` within `(deployment_id, name)`; not globally unique | Compose service key | Identifies the service within its Compose deployment |
+| `container_name` | `String?` | Nullable because Compose may not declare one | No global uniqueness is defined | Compose service definition | Records desired/static `container_name`, if declared |
+| `image` | `String?` | Nullable because the service may use `build` instead | No uniqueness is defined | Compose service definition | Records desired image when the service uses an image |
+| `build_context` | `String?` | Nullable because the service may use `image` instead | No index is defined | Compose build definition | Records build context when the service is built |
 
-The field placement for `build_context` is shown by the normalized service examples in the source documents, while deployment-level source context is also shown in the ERD. Whether both deployment-level and service-level context are retained, and which one is canonical, is an **Open Question**.
+The finalized schema retains both deployment-level `sourceContext` and service-level `buildContext`. The normalizer must preserve their distinct meanings; precedence when both describe the same build source is an application-layer concern.
 
 ### Constraints
 
 - `deployment_id` is a foreign key to `ApplicationDeployment.id`.
 - A service belongs to exactly one deployment.
-- A service name is expected to be unique within one deployment for unambiguous Compose mapping, but the composite unique constraint is not explicitly stated by the source documents and is therefore **Decision Required**.
+- A service name is unique within one deployment through the finalized `@@unique([deploymentId, name])` constraint; it is not globally unique.
 - A service may use `image`, `build`, or both according to Compose semantics. The registry must not require `image` when a build definition is present.
 - Desired `container_name` and observed runtime `container_name` must not be treated as the same state without an explicit mapping decision.
 
@@ -241,7 +256,7 @@ Each key under `services` in the Compose response maps to one `ApplicationServic
 - service key -> `ApplicationService.name`
 - Compose `container_name` -> `ApplicationService.container_name` as desired state
 - Compose `image` -> `ApplicationService.image`
-- Compose `build.context` -> `ApplicationService.build_context` or deployment-level source context; final placement is **Decision Required**
+- Compose `build.context` -> `ApplicationService.buildContext`; deployment-level source metadata maps to `ApplicationDeployment.sourceContext` when available
 - Compose healthcheck, restart policy, command, and env-file paths are present in the verified Compose response description but do not have canonical fields in the ERD. Their storage location is **Decision Required**.
 
 The raw installed-list container `service_name` can be used to match a runtime observation to this entity, but the exact matching and fallback algorithm is **Decision Required**.
@@ -256,26 +271,26 @@ The raw installed-list container `service_name` can be used to match a runtime o
 
 | Field | Conceptual type | Nullability / status | Uniqueness and index | Source of truth | Purpose |
 | --- | --- | --- | --- | --- | --- |
-| `id` | String-like internal identifier | Non-null as primary key | Primary key | Zima Control Center | Stable port mapping identity |
-| `service_id` | String-like foreign key | Non-null | Index recommended for listing service ports; physical index is **Decision Required** | `ApplicationService.id` | Links the mapping to its service |
-| `published` | String-like port value | Non-null for a valid mapping | No uniqueness is defined | Compose `ports` mapping; raw installed port mapping may corroborate it | Host/published port or published range |
-| `target` | Integer-like port value, or a range representation | Non-null for a valid mapping | No uniqueness is defined | Compose `ports` mapping | Container/target port |
-| `protocol` | String or enum-like value | Non-null for a valid mapping | No uniqueness is defined | Compose `ports` mapping | Records protocol such as TCP/UDP when available |
+| `id` | `String @id @default(uuid())` | Non-null as primary key | Primary key | Zima Control Center | Stable port mapping identity |
+| `service_id` | `String` foreign key | Non-null | Index on `service_id` | `ApplicationService.id` | Links the mapping to its service |
+| `published` | `String` | Non-null for a valid mapping | No uniqueness is defined | Compose `ports` mapping; raw installed port mapping may corroborate it | Host/published port or published range |
+| `target` | `Int` | Non-null for a valid single-port mapping | No uniqueness is defined | Compose `ports` mapping | Container/target port |
+| `protocol` | `String` | Non-null for a valid mapping | No uniqueness is defined | Compose `ports` mapping | Records protocol such as TCP/UDP when available |
 
-The source examples use a string for `published` and a number for `target`. Support for ranges, host IP, protocol variants, and long syntax fields is not fully defined by the ERD. Those physical representations are **Decision Required**.
+The finalized v1 schema uses a string for `published` and `Int` for a single `target` port. Compose target ranges, host IP, protocol variants, and other long syntax fields remain deferred rather than being represented by additional fields.
 
 ### Constraints
 
 - `service_id` is a foreign key to `ApplicationService.id`.
 - A port mapping cannot exist without its service.
-- The source documents do not define a unique constraint for ports. Duplicate or equivalent mappings and their normalization are **Decision Required**.
+- The source documents do not define a unique constraint for ports. Duplicate or equivalent mappings remain an application-layer normalization concern.
 - Port values discovered from the installed inventory and port values declared by Compose may have different authority. The desired-state source of truth is Compose unless a later decision establishes another rule.
 
 ### ZimaOS Mapping
 
 - Compose service `ports` -> `DeploymentPort` rows.
 - Raw installed-list `port_mappings` -> runtime/discovery input that may be compared with the Compose mapping.
-- The current schema design does not define a separate observed-port entity. Whether installed-list port mappings update `DeploymentPort` or are treated only as validation metadata is **Decision Required**.
+- The schema does not define a separate observed-port entity. Installed-list port mappings remain discovery input for comparison or validation; precedence is an application-layer concern.
 
 ## 5. DeploymentVolume
 
@@ -287,18 +302,18 @@ The source examples use a string for `published` and a number for `target`. Supp
 
 | Field | Conceptual type | Nullability / status | Uniqueness and index | Source of truth | Purpose |
 | --- | --- | --- | --- | --- | --- |
-| `id` | String-like internal identifier | Non-null as primary key | Primary key | Zima Control Center | Stable volume mapping identity |
-| `service_id` | String-like foreign key | Non-null | Index recommended for listing service volumes; physical index is **Decision Required** | `ApplicationService.id` | Links the mapping to its service |
-| `source` | String path or volume name | Non-null for a valid mapping | No uniqueness is defined | Compose `volumes` mapping | Host path or named-volume source |
-| `target` | String container path | Non-null for a valid mapping | No uniqueness is defined | Compose `volumes` mapping | Container mount target |
+| `id` | `String @id @default(uuid())` | Non-null as primary key | Primary key | Zima Control Center | Stable volume mapping identity |
+| `service_id` | `String` foreign key | Non-null | Index on `service_id` | `ApplicationService.id` | Links the mapping to its service |
+| `source` | `String` | Non-null for a valid mapping | No uniqueness is defined | Compose `volumes` mapping | Host path or named-volume source |
+| `target` | `String` | Non-null for a valid mapping | No uniqueness is defined | Compose `volumes` mapping | Container mount target |
 
-The ERD explicitly defines `source` and `target`. Read-only mode, propagation, and volume-driver details are not part of the current entity specification; adding them is **Decision Required**.
+The ERD explicitly defines `source` and `target`. Read-only mode, propagation, and volume-driver details are outside the finalized entity scope.
 
 ### Constraints
 
 - `service_id` is a foreign key to `ApplicationService.id`.
 - A volume mapping cannot exist without its service.
-- The source documents do not define a unique constraint for `(service_id, source, target)` or any alternative. Duplicate handling is **Decision Required**.
+- The source documents do not define a unique constraint for `(service_id, source, target)` or any alternative. Duplicate handling remains an application-layer normalization concern.
 - Docker `overlay2` is not an application backup source and is not a `DeploymentVolume` value merely because it is part of Docker internals.
 
 ### ZimaOS Mapping
@@ -320,16 +335,16 @@ Paths should remain deployment metadata. The registry does not imply that the ap
 
 | Field | Conceptual type | Nullability / status | Uniqueness and index | Source of truth | Purpose |
 | --- | --- | --- | --- | --- | --- |
-| `id` | String-like internal identifier | Non-null as primary key | Primary key | Zima Control Center | Stable network membership identity |
-| `service_id` | String-like foreign key | Non-null in the service-scoped design | Index recommended for listing service networks; physical index is **Decision Required** | `ApplicationService.id` | Links membership to its service |
-| `name` | String | Non-null for a valid membership | Uniqueness within a service is **Decision Required** | Compose service `networks` mapping | Records the network name |
-| `is_external` | Boolean | Expected when Compose exposes the value; nullability/default is **Decision Required** | No uniqueness is defined | Compose network metadata | Distinguishes an external network from a project-created network |
+| `id` | `String @id @default(uuid())` | Non-null as primary key | Primary key | Zima Control Center | Stable network membership identity |
+| `service_id` | `String` foreign key | Non-null in the service-scoped design | Composite index on `(service_id, name)` | `ApplicationService.id` | Links membership to its service |
+| `name` | `String` | Non-null for a valid membership | No uniqueness; the same network may serve multiple services | Compose service `networks` mapping | Records the network name |
+| `is_external` | `Boolean?` | Nullable | No uniqueness is defined | Compose network metadata | Distinguishes an external network from a project-created network |
 
 ### Constraints
 
 - `service_id` is a foreign key to `ApplicationService.id`.
 - The primary relationship in this specification is `ApplicationService 1 -> N DeploymentNetwork`.
-- The ERD ASCII diagram also shows a visually direct `ApplicationDeployment -> DeploymentNetwork` branch, while the entity description and requested relationship describe networks under services. Whether deployment-scoped networks require a separate relation or field is an **Open Question**.
+- The finalized schema keeps networks service-scoped. The visually direct deployment branch in the ERD is treated as conceptual context; no deployment-scoped network relation is implemented in v1.
 - No global unique constraint on network name is defined. The same network may be used by multiple services.
 
 ### ZimaOS Mapping
@@ -348,21 +363,21 @@ The current design does not make a network a top-level registry entity. The regi
 
 | Field | Conceptual type | Nullability / status | Uniqueness and index | Source of truth | Purpose |
 | --- | --- | --- | --- | --- | --- |
-| `id` | String-like internal identifier | Non-null as primary key | Primary key | Zima Control Center | Stable environment metadata identity |
-| `service_id` | String-like foreign key | Non-null | Index recommended for listing service environment metadata; physical index is **Decision Required** | `ApplicationService.id` | Links metadata to its service |
-| `key` | String | Non-null | Uniqueness within one service is **Decision Required** | Compose environment key or env-file key | Identifies the variable without storing its value |
-| `type` | String or enum-like value | **Decision Required** | No index is defined | Normalizer classification | Describes metadata such as ordinary or secret-like; exact value set is not defined |
-| `is_secret` | Boolean | Non-null conceptually; default behavior is **Decision Required** | No uniqueness is defined | Secret-key classification and Compose metadata | Indicates that the value must not be stored or displayed as plaintext |
-| `configured` | Boolean-like metadata | Whether this is separate from `present` is **Decision Required** | No index is defined | Compose/environment normalization | Indicates whether configuration for the key is declared |
-| `present` | Boolean-like metadata | Whether this is separate from `configured` is **Decision Required** | No index is defined | Compose/environment normalization | Indicates whether the key/value source is present in the inspected deployment |
-| `source` | String or enum-like value | Nullable or required is **Decision Required** | No index is defined | Compose declaration, env file metadata, or other discovery source | Identifies where the metadata came from without exposing the value |
+| `id` | `String @id @default(uuid())` | Non-null as primary key | Primary key | Zima Control Center | Stable environment metadata identity |
+| `service_id` | `String` foreign key | Non-null | Covered by the finalized composite unique constraint with `key` | `ApplicationService.id` | Links metadata to its service |
+| `key` | `String` | Non-null | `UNIQUE` within `(service_id, key)`; not globally unique | Compose environment key or env-file key | Identifies the variable without storing its value |
+| `type` | `String?` | Nullable | No index is defined | Normalizer classification | Describes metadata such as ordinary or secret-like; exact value set is not defined |
+| `is_secret` | `Boolean` | Non-null; classification is supplied by normalization | No uniqueness is defined | Secret-key classification and Compose metadata | Indicates that the value must not be stored or displayed as plaintext |
+| `configured` | `Boolean?` | Nullable | No index is defined | Compose/environment normalization | Indicates whether configuration for the key is declared |
+| `present` | `Boolean?` | Nullable | No index is defined | Compose/environment normalization | Indicates whether the key/value source is present in the inspected deployment |
+| `source` | `String?` | Nullable | No index is defined | Compose declaration, env file metadata, or other discovery source | Identifies where the metadata came from without exposing the value |
 
 There is deliberately no default plaintext `value` field in this design. If a future secret-reference field is needed, the storage contract must be designed separately.
 
 ### Constraints
 
 - `service_id` is a foreign key to `ApplicationService.id`.
-- `key` identifies a variable within a service. A composite unique constraint such as `(service_id, key)` is plausible for idempotent normalization, but it is not explicitly specified by the source documents and is therefore **Decision Required**.
+- `key` identifies a variable within a service through the finalized `@@unique([serviceId, key])` constraint; it is not globally unique.
 - `is_secret` must prevent plaintext values from being written to the registry, logs, or UI by default.
 - Secret detection must cover at least the verified examples `DATABASE_URL`, `JWT_SECRET`, `MYSQL_PASSWORD`, and `MYSQL_ROOT_PASSWORD`; the final classification rules are part of the adapter design, not this schema document.
 
@@ -388,22 +403,22 @@ Only sanitized metadata is stored. The raw value is not mapped to a database fie
 
 | Field | Conceptual type | Nullability / status | Uniqueness and index | Source of truth | Purpose |
 | --- | --- | --- | --- | --- | --- |
-| `id` | String-like internal identifier | Non-null as primary key | Primary key | Zima Control Center | Stable registry identity for an observation record |
-| `service_id` | String-like foreign key | Non-null | Index recommended for listing runtime containers; physical index is **Decision Required** | `ApplicationService.id` | Links the observation to its service |
-| `container_id` | String | Non-null for an actual container observation | Lookup and uniqueness are **Decision Required**; runtime IDs are expected to be stable while the container exists | ZimaOS installed-list container `id` or Docker runtime adapter | External runtime container identity |
-| `container_name` | String | Non-null for a complete runtime observation; partial handling is **Decision Required** | No global uniqueness is defined | Runtime observation | Actual container name, distinct from desired Compose `container_name` when necessary |
-| `image` | String | Nullable when the runtime source does not expose it | No uniqueness is defined | Runtime observation | Actual image used by the running/stopped container |
-| `state` | String | Nullable only for an incomplete observation; exact rule is **Decision Required** | No index is defined | Runtime observation | Low-level runtime state such as running/stopped |
-| `status` | String | Nullable only for an incomplete observation; exact rule is **Decision Required** | No index is defined | Runtime observation | Runtime status/details exposed by the source |
-| `observed_at` | DateTime-like instant | **Decision Required**; not present in the ERD fields | Time index is **Decision Required** | Zima Control Center observation process | Records freshness of the runtime observation if added |
+| `id` | `String @id @default(uuid())` | Non-null as primary key | Primary key | Zima Control Center | Stable registry identity for an observation record |
+| `service_id` | `String` foreign key | Non-null | Index on `service_id` | `ApplicationService.id` | Links the observation to its service |
+| `container_id` | `String @unique` | Non-null for an actual container observation | Unique for the current single-runtime-host assumption | ZimaOS installed-list container `id` or Docker runtime adapter | External runtime container identity |
+| `container_name` | `String?` | Nullable | No global uniqueness is defined | Runtime observation | Actual container name, distinct from desired Compose `container_name` when necessary |
+| `image` | `String?` | Nullable | No uniqueness is defined | Runtime observation | Actual image used by the running/stopped container |
+| `state` | `String?` | Nullable | No index is defined | Runtime observation | Low-level runtime state such as running/stopped |
+| `status` | `String?` | Nullable | No index is defined | Runtime observation | Runtime status/details exposed by the source |
+| `observed_at` | `DateTime?` | Nullable when no current observation timestamp is available | No index | Zima Control Center observation process | Records freshness of the current runtime observation |
 
 ### Constraints
 
 - `service_id` is a foreign key to `ApplicationService.id`.
 - Runtime identity must not replace `Application.id` or `Application.zimaos_app_id`.
 - A service may have no current runtime container when it is stopped, not yet started, or not discoverable; the collection may therefore be empty.
-- Whether old container observations are updated in place, replaced, or retained as history is **Decision Required**.
-- Whether `container_id` is unique globally, unique among active observations, or merely indexed is **Decision Required**.
+- Current runtime rows are reconciled or replaced after successful discovery; historical observations remain deferred.
+- `container_id` is unique for the current single-runtime-host assumption. Multi-host identity scoping remains deferred.
 
 ### ZimaOS Mapping
 
@@ -418,7 +433,7 @@ The intended mappings are:
 - raw container `state` -> `RuntimeContainer.state`
 - raw container `status` -> `RuntimeContainer.status`
 
-The matching algorithm, handling of multiple containers per service, and source precedence between ZimaOS and a future Docker adapter are **Decision Required**.
+The matching algorithm, handling of multiple containers per service, and source precedence between ZimaOS and a future Docker adapter remain application-layer questions.
 
 ## Relationships
 
@@ -428,7 +443,7 @@ The matching algorithm, handling of multiple containers per service, and source 
 Application 1 ---- 0..1 ApplicationDeployment
 ```
 
-This follows the ERD, which shows `ApplicationDeployment.application_id` as both a foreign key and unique. The task prompt describes `Application 1 -> N ApplicationDeployment` as a general relationship to explain, but the current source design is different: it models only one current deployment per application. No historical deployment relationship is defined.
+This follows the ERD, which shows `ApplicationDeployment.application_id` as both a foreign key and unique. The task prompt describes `Application 1 -> N ApplicationDeployment` as a general relationship to explain, but the current source design is different: it models only one current deployment per application. No historical deployment relationship is defined. The root application delete policy remains unresolved and is not encoded with an explicit `onDelete` in the schema.
 
 If historical deployments are needed later, the unique constraint and lifecycle model must be revisited in a separate design decision.
 
@@ -438,7 +453,7 @@ If historical deployments are needed later, the unique constraint and lifecycle 
 ApplicationDeployment 1 ---- N ApplicationService
 ```
 
-Each service belongs to exactly one deployment. A valid Compose deployment is expected to contain one or more services. Whether an incomplete deployment record with zero services is permitted during partial discovery is **Decision Required**.
+Each service belongs to exactly one deployment. A valid Compose deployment is expected to contain one or more services; the database relation permits an empty collection and application-layer validation may enforce a minimum when required. Deleting a deployment cascades to its owned services.
 
 ### ApplicationService to child entities
 
@@ -450,7 +465,7 @@ ApplicationService 1 ---- 0..N EnvironmentVariable
 ApplicationService 1 ---- 0..N RuntimeContainer
 ```
 
-These are parent-to-many ownership relationships. The child foreign key is required, but the collection can be empty when the service has no matching data. This is the runtime-aware interpretation of the requested `1 -> N` relationships.
+These are parent-to-many ownership relationships. The child foreign key is required, but the collection can be empty when the service has no matching data. This is the runtime-aware interpretation of the requested `1 -> N` relationships. Child snapshot relations use `onDelete: Cascade`; all foreign-key relations use `onUpdate: Restrict`.
 
 - A service can have no published ports.
 - A service can have no persistent volume mapping.
@@ -484,7 +499,7 @@ The schema must preserve the distinction below.
 | Volumes | Compose source -> target mapping | Runtime mount observation is not a separate current entity |
 | Networks | Compose service network membership | Runtime network observation is not a separate current entity |
 | Environment | Key/type/secret/presence metadata | Runtime environment values are not stored |
-| Timestamp | `ApplicationDeployment.discovered_at` | Optional `RuntimeContainer.observed_at`, which is not yet source-defined |
+| Timestamp | `ApplicationDeployment.discoveredAt` | Optional `RuntimeContainer.observedAt` |
 | Change detection | Sanitized normalized `source_hash` | Runtime state/status changes |
 
 An `image` field may exist in both `ApplicationService` and `RuntimeContainer` because the first means desired image configuration and the second means observed runtime image. They must not be silently conflated.
@@ -578,7 +593,7 @@ normalized deployment model
 | --- | --- | --- |
 | Compose/app name | `ApplicationDeployment.compose_name` | Intended mapping |
 | redacted Compose snapshot | `ApplicationDeployment.compose_yaml_redacted` | Required for the documented snapshot model |
-| build context | `ApplicationDeployment.source_context` and/or `ApplicationService.build_context` | Exact canonical placement is open |
+| build context | `ApplicationService.buildContext`; deployment-level source metadata maps to `ApplicationDeployment.sourceContext` when available | Both fields are implemented with distinct deployment/service semantics |
 | Dockerfile path | `ApplicationDeployment.dockerfile_path` | Nullable when not applicable |
 | normalized sanitized deployment | `ApplicationDeployment.source_hash` | Algorithm and hash format are open |
 | service key | `ApplicationService.name` | Intended mapping |
@@ -640,7 +655,7 @@ This document does not choose an encrypted database column, an external vault, a
 
 ### Internal primary key
 
-Every registry entity has an internal `id` primary key in the conceptual model. The source documents do not choose UUID, CUID, integer, or another physical generator. The internal key type and generation strategy are **Decision Required**.
+Every registry entity has an internal `id` primary key. The finalized schema uses `String @id @default(uuid())`; these IDs are independent of ZimaOS IDs, names, service names, and runtime container IDs.
 
 ### ZimaOS application ID
 
@@ -654,7 +669,7 @@ The source identity priority is:
 3. fallback internal generated ID
 ```
 
-The source does not explicitly state whether `zimaos_app_id` must be unique. Enforcing uniqueness is useful for idempotent discovery, but it is **Decision Required**.
+The finalized schema makes `zimaos_app_id` nullable and unique when supplied. This supports idempotent discovery without making the external ID the internal primary key.
 
 ### Application name
 
@@ -662,11 +677,11 @@ The source does not explicitly state whether `zimaos_app_id` must be unique. Enf
 
 ### Service name
 
-A Compose service name is scoped to a deployment in the source model. Global uniqueness would be incorrect for two deployments that both contain a service named `web`. Whether `(deployment_id, name)` becomes a composite unique constraint is **Decision Required**.
+A Compose service name is scoped to a deployment in the source model. Global uniqueness would be incorrect for two deployments that both contain a service named `web`. The finalized schema enforces `@@unique([deploymentId, name])`.
 
 ### Container ID and container name
 
-`RuntimeContainer.container_id` is the external runtime identity. It must not become the application identity. Whether it is globally unique, unique only among active observations, or simply indexed is **Decision Required**.
+`RuntimeContainer.container_id` is the external runtime identity. It must not become the application identity. The finalized schema makes it unique for the current single-runtime-host assumption; multi-host scoping remains deferred.
 
 Runtime `container_name` is not guaranteed to be globally unique in this conceptual model. A desired Compose `container_name` may be stored on `ApplicationService`, while an actual observed name belongs on `RuntimeContainer`; the final duplication and reconciliation policy is **Decision Required**.
 
@@ -677,52 +692,54 @@ The source design explicitly includes discovery timestamps:
 - `Application.last_discovered_at`
 - `ApplicationDeployment.discovered_at`
 
-The Blueprint uses `captured_at` for deployment snapshots. The naming convention must be resolved before implementation.
+The Blueprint uses the historical name `captured_at` for deployment snapshots; the finalized schema uses `discoveredAt`.
 
-The following lifecycle timestamps are proposed but not committed by the source documents:
+The finalized lifecycle timestamp fields are:
 
-- `Application.created_at`
-- `Application.updated_at`
-- `RuntimeContainer.observed_at`
+- `Application.createdAt DateTime @default(now())`
+- `Application.updatedAt DateTime @updatedAt`
+- `Application.lastDiscoveredAt DateTime?`
+- `ApplicationDeployment.discoveredAt DateTime`
+- `RuntimeContainer.observedAt DateTime?`
 
-Their addition, automatic update behavior, precision, timezone/instant convention, and nullability are **Decision Required**.
+Their application-layer update semantics are defined in the implementation-aligned decision record.
 
-A successful discovery should update the relevant discovery timestamp. A failed request should not falsely advance `last_discovered_at` or `discovered_at`.
+A successful discovery should update the relevant discovery timestamp. A failed request should not falsely advance `lastDiscoveredAt` or `discoveredAt`.
 
 ## Index Strategy
 
-The following indexes are recommended for documented queries. A recommendation is not yet an implemented Prisma constraint unless the source explicitly defines it.
+The finalized schema uses unique constraints where identity requires them and non-unique indexes for filtering or child collection traversal.
 
 | Query | Candidate index/constraint | Status and reason |
 | --- | --- | --- |
 | Find application by name | unique index on `Application.name` | Explicitly defined by the ERD; required for stable name lookup |
-| Find application by ZimaOS app ID | index on `Application.zimaos_app_id`, possibly unique | Index supports discovery upsert; uniqueness is **Decision Required** |
-| List applications by status | non-unique index on `Application.status` | Recommended for inventory/dashboard filtering; physical index is **Decision Required** |
-| List services for an application | index on `ApplicationService.deployment_id`, joined through the current deployment | Recommended for relationship traversal; physical index is **Decision Required** |
-| Find runtime container | index on `RuntimeContainer.container_id` | Recommended for runtime lookup; uniqueness policy is **Decision Required** |
+| Find application by ZimaOS app ID | nullable unique constraint on `Application.zimaosAppId` | Supports discovery upsert and prevents duplicate supplied external identities |
+| List applications by status | non-unique index on `Application.status` | Supports inventory/dashboard filtering |
+| List services for an application | current deployment relation joined to `ApplicationService` | Service identity is enforced by `@@unique([deploymentId, name])` |
+| Find runtime container | unique constraint on `RuntimeContainer.containerId` | Supports lookup under the current single-runtime-host assumption |
 | Find deployment by application | unique index on `ApplicationDeployment.application_id` | Explicitly implied by the ERD `FK UQ`; enforces one current deployment |
-| List ports, volumes, networks, or environment for a service | index on each child `service_id` | Recommended for normalized child collection queries; physical indexes are **Decision Required** |
-| Find environment metadata by service and key | composite index or unique constraint on `(service_id, key)` | Useful for idempotent normalization; **Decision Required** |
-| Find service by deployment and name | composite index or unique constraint on `(deployment_id, name)` | Needed for Compose service matching; **Decision Required** |
+| List ports, volumes, networks, or runtime containers for a service | index on each child `serviceId` | Supports normalized child collection queries; environment rows use their composite unique constraint |
+| Find environment metadata by service and key | `@@unique([serviceId, key])` | Supports idempotent normalization |
+| Find service by deployment and name | `@@unique([deploymentId, name])` | Supports Compose service matching |
 
-The source documents do not require indexes on `display_name`, `managed_by`, `source_hash`, or timestamps. Adding them should be driven by actual query requirements.
+The schema does not define indexes on `displayName`, `managedBy`, `sourceHash`, or timestamps because they are not required by the current documented queries.
 
 ## Lifecycle and Delete Policy
 
-The source documents define an upsert/replace-current-snapshot direction but do not define destructive referential actions. The following behavior must remain explicit.
+The source documents define an upsert/replace-current-snapshot direction. The finalized schema encodes child snapshot cascades and update restriction; root application deletion and stale-record behavior remain deferred.
 
 | Event | Confirmed source behavior | Unresolved policy |
 | --- | --- | --- |
 | Application is absent from a ZimaOS response | No automatic deletion rule is defined | **Decision Required:** mark stale, retain, soft-delete, or remove; absence in a partial/failing response must not be treated as proof of deletion |
 | Application is removed from ZimaOS | No delete/cascade rule is defined | **Decision Required:** retention and status behavior |
 | Discovery request fails | Discovery failure must not automatically set application to `STOPPED` | **Decision Required:** error/staleness metadata and retry behavior |
-| A new deployment snapshot is found | ERD says to replace the current deployment snapshot and update `source_hash` | **Decision Required:** in-place update versus record replacement and whether history is retained |
+| A new deployment snapshot is found | Update or replace the current deployment snapshot and update `sourceHash` | Deployment history remains deferred; current-snapshot persistence is an application-layer operation |
 | A service disappears from the new Compose snapshot | Current deployment is normalized from the new snapshot | **Decision Required:** delete old service children, mark stale, or retain history |
-| A runtime container changes or is recreated | Runtime data is updated without changing application identity | **Decision Required:** update one row, replace the current observation, or retain observations |
+| A runtime container changes or is recreated | Reconcile or replace current runtime rows without changing application identity | Historical runtime observations remain deferred |
 | An application is explicitly deleted from the registry | No user/admin deletion workflow is specified | **Decision Required:** authorization, soft deletion, hard deletion, and audit behavior |
-| A parent is deleted | No Prisma referential action is specified | **Decision Required:** `Cascade`, `Restrict`, `SetNull`, or an application-level transaction |
+| A parent is deleted | Child snapshot relations use `onDelete: Cascade`; the root application relation has no explicit `onDelete` | **Deferred:** root application deletion policy and application-level transaction behavior |
 
-Until these decisions are made, no destructive cascade should be assumed in the Prisma implementation. The registry should preserve enough identity and timestamps to support a later lifecycle decision.
+The schema intentionally cascades deletion from deployment to owned services and from services to their child snapshot records. It does not encode a root application delete action. The application layer must also avoid stale-record deletion after failed or partial discovery.
 
 ## Normalization Flow
 
@@ -759,37 +776,31 @@ The raw API response is not the database schema.
 8. Produce a sanitized normalized representation for `source_hash`.
 9. Upsert the current application/deployment identity according to the decisions in this document.
 
-The exact normalization code, parser, API client, discovery command, and database write path are outside this documentation-only task.
+The exact normalization code, parser, API client, discovery command, and database write path are outside this schema documentation.
 
 ## Prisma Implementation Notes
 
-This section describes a future translation only. It does not modify or implement `prisma/schema.prisma`.
+This section describes how the implemented schema translates the design. It does not describe migrations or runtime database operations.
 
 ### Model and field translation
 
-The eight conceptual entities are expected to become Prisma models with relation fields and foreign-key scalar fields. The exact physical table naming convention is **Decision Required**:
-
-- use Prisma model names as database table names, or
-- use snake_case table names with `@@map`, or
-- use another established project convention.
-
-The source documents use both PascalCase conceptual names and snake_case field examples. The implementation must choose one consistent mapping before coding.
+The eight conceptual entities are implemented as Prisma models with relation fields and foreign-key scalar fields. The finalized schema uses Prisma default model/table naming, PascalCase model names, and camelCase field names without `@map` or `@@map`.
 
 ### Conceptual scalar types
 
-The likely conceptual translations are:
+The implemented scalar translations are:
 
 - identifiers, names, paths, hashes, and metadata: `String`
 - boolean metadata such as `is_uncontrolled`, `is_secret`, and `is_external`: `Boolean`
 - lifecycle/discovery/observation timestamps: `DateTime`
-- port target values: an integer-like value or a range-compatible representation, pending the port decision
-- status/classification values: `String` or provider-compatible enum, pending the enum decision
+- port target values: `Int` for a single-port v1 representation
+- status/classification values: `String`; enum refinement is deferred
 
-The current datasource is SQLite. The physical enum strategy, provider compatibility, and representation of structured metadata must be confirmed before adding Prisma models. This is **Decision Required**.
+The current datasource is SQLite. The physical enum strategy and representation of additional structured metadata remain deferred; they are not required by the finalized eight-model schema.
 
 ### Nullable fields
 
-Prisma optional fields should be used only where the conceptual model permits absence, such as:
+Prisma optional fields are used where the current model permits absence, such as:
 
 - `Application.zimaos_app_id` for resources without a ZimaOS ID
 - `Application.zimaos_store_app_id` when store metadata is unavailable
@@ -797,20 +808,24 @@ Prisma optional fields should be used only where the conceptual model permits ab
 - optional source context or Dockerfile path
 - runtime fields when no complete observation exists
 
-The complete field-by-field optionality is not fully established by the source documents. It must be resolved before implementation rather than silently inferred from a convenient Prisma type.
+The finalized schema records the current nullability choices. Remaining open questions concern ingestion semantics and unrepresented source metadata, not the existence of the implemented models.
 
 ### Relations and constraints
 
-The future Prisma schema will need:
+The finalized schema contains:
 
-- primary keys for all eight models
+- UUID-backed string primary keys for all eight models
 - foreign keys from each child to its parent
 - a unique `Application.name`
-- a unique `ApplicationDeployment.application_id` for the current-deployment model
-- indexes selected from the finalized index strategy
-- referential actions selected from the lifecycle/delete decision
+- a nullable unique `Application.zimaosAppId`
+- a unique `ApplicationDeployment.applicationId` for the current-deployment model
+- `@@unique([deploymentId, name])` for service identity
+- `@@unique([serviceId, key])` for environment identity
+- a unique `RuntimeContainer.containerId`
+- `onDelete: Cascade` for child snapshot relations
+- `onUpdate: Restrict` for foreign-key relations
 
-Composite unique constraints for service names and environment keys are not yet committed.
+The root `Application -> ApplicationDeployment` relation intentionally has no explicit `onDelete`; its deletion policy remains deferred.
 
 ### Normalized collections
 
@@ -822,7 +837,7 @@ Ports, volumes, networks, environment metadata, and runtime containers should be
 
 ### Migration and generated client
 
-Implementing the future Prisma schema will require a separate implementation task and its own validation plan. This documentation task does not run:
+Any future schema refinement or migration will require a separate implementation task and its own validation plan. This task does not run:
 
 - `prisma migrate`
 - `prisma db push`
@@ -830,34 +845,19 @@ Implementing the future Prisma schema will require a separate implementation tas
 
 No database operation is implied by this document.
 
-## Decision Required / Open Questions
+## Deferred Decisions / Open Questions
 
-The following items must be resolved before implementing `prisma/schema.prisma`:
+The following items remain intentionally deferred after schema finalization:
 
-1. Internal primary-key type and generator: UUID, CUID, integer, or another strategy.
-2. Whether `Application.zimaos_app_id` is unique and how external ID changes are handled.
-3. Exact allowed values and physical representation for `resource_type`, `runtime`, `status`, `managed_by`, environment `type`, and network/protocol metadata.
-4. Exact nullability/defaults for fields whose source documents do not specify them.
-5. Whether `created_at` and `updated_at` are required, and how they are maintained.
-6. Whether deployment timestamps use `discovered_at`, `captured_at`, or both.
-7. Whether runtime observations require `observed_at`.
-8. Whether the registry stores only the current deployment or later introduces deployment history.
-9. Whether a service name must be unique within `(deployment_id, name)`.
-10. Whether an environment key must be unique within `(service_id, key)`.
-11. How Compose build context and Dockerfile fields are divided between deployment and service.
-12. Whether desired `container_name` is stored on `ApplicationService`, runtime `container_name` is stored only on `RuntimeContainer`, or both are retained with explicit semantics.
-13. Whether networks are service-scoped only or also have a deployment-scoped relation, due to the ERD diagram ambiguity.
-14. Whether installed-list port mappings are authoritative, corroborating, or separate from desired Compose ports.
-15. The exact mapping from ZimaOS `title`, `app_type`, `status`, `install_status`, `scheme`, `version`, and store metadata.
-16. The exact service matching algorithm for `containers[].service_name`.
-17. The normalization and hash algorithm for `source_hash`.
-18. **Secret storage backend.** No plaintext secret storage implementation is selected.
-19. The distinction and source values for environment `configured`, `present`, and `source` metadata.
-20. Runtime container retention: update in place, replace current observation, or retain history.
-21. Behavior when an application, service, or container disappears from a subsequent discovery.
-22. Hard-delete versus soft-delete behavior and all Prisma referential actions.
-23. Exact physical indexes for status, external IDs, child foreign keys, and timestamps.
-24. Whether fields present in Compose but absent from the eight-entity ERD, such as healthcheck, restart policy, command, env-file paths, and `x-casaos` metadata, belong in this registry or a later model.
+1. Root `Application -> ApplicationDeployment` deletion policy and stale/deleted application behavior.
+2. Deployment history beyond the current deployment snapshot.
+3. Historical runtime observation retention.
+4. Secret storage backend or secret-reference persistence.
+5. Compose target port ranges and advanced long-form port syntax.
+6. Multi-host runtime identity scoping.
+7. Additional ZimaOS metadata mapping, including title locale selection, app type normalization, healthcheck, restart policy, command, env-file paths, and `x-casaos` metadata.
+8. Exact service matching and source-precedence rules where ZimaOS data does not map unambiguously to the normalized model.
+9. Source hash algorithm and any future enum refinement for classification/status fields.
 
 ## Acceptance Criteria
 
@@ -873,11 +873,11 @@ This documentation milestone is complete when:
 - secret metadata and redaction behavior are specified without selecting a secret backend
 - lifecycle and delete/cascade behavior is identified without inventing destructive policy
 - Backup Registry and other later milestone features remain out of scope
-- `prisma/schema.prisma` remains unchanged and unimplemented
+- `prisma/schema.prisma` contains only the eight Application Registry models and the preserved datasource/generator
 - no migration, database command, Docker command, or ZimaOS server access is required or performed
 
 ## Next Step
 
-Resolve the items in [Decision Required / Open Questions](#decision-required--open-questions), then create a separate implementation task for the Prisma models. That implementation task must explicitly decide table/field naming, nullability, external-ID uniqueness, referential actions, indexes, and secret metadata semantics before changing `prisma/schema.prisma`.
+Use this finalized schema and documentation as the Application Registry checkpoint for the next implementation stage. Keep the deferred lifecycle, history, secret, port-range, multi-host, stale-record, and additional ZimaOS metadata decisions out of scope until they receive a separate design decision.
 
-Milestone 1A.2 implementation is not claimed as complete by this document.
+Milestone 1A.2 Prisma implementation is complete at the schema-validation stage; migrations and runtime persistence remain out of scope.
