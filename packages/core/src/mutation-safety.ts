@@ -19,7 +19,7 @@ export type ActionType = (typeof actionTypes)[number];
 
 export const actionStatuses = [
   "PENDING", "AUTHORIZED", "VALIDATED", "EXECUTING", "VERIFYING",
-  "SUCCEEDED", "REJECTED", "FAILED", "TIMED_OUT", "CANCELLED",
+  "SUCCEEDED", "REJECTED", "FAILED", "TIMED_OUT", "CANCELLED", "INDETERMINATE",
 ] as const;
 export type ActionStatus = (typeof actionStatuses)[number];
 export type ExecutionDomain = "ZIMAOS" | "DOCKER" | "UNSUPPORTED";
@@ -62,8 +62,15 @@ export interface ActionResult {
 
 export interface ActionExecutionResult {
   accepted: boolean;
+  outcome: ActionExecutionOutcome;
   errorCode?: "EXECUTION_REJECTED";
 }
+
+export type ActionExecutionOutcome =
+  | "NOT_STARTED"
+  | "CANCELLED_BEFORE_EFFECT"
+  | "COMPLETED"
+  | "EFFECT_POSSIBLY_ACTIVE";
 
 export interface VerificationResult {
   verified: boolean;
@@ -87,6 +94,12 @@ export type MutationErrorCode =
   | "EXECUTION_REJECTED"
   | "EXECUTION_FAILED"
   | "VERIFICATION_FAILED"
+  | "PERSISTENCE_FAILED"
+  | "RECOVERY_PRE_EXECUTION_ABORTED"
+  | "RECOVERY_OUTCOME_UNKNOWN"
+  | "AUDIT_PERSISTENCE_FAILED"
+  | "OPERATION_TIMED_OUT"
+  | "STALE_OPERATION_OWNERSHIP"
   | "NOT_IMPLEMENTED";
 
 export class MutationError extends Error {
@@ -97,16 +110,16 @@ export class MutationError extends Error {
 }
 
 const terminalStatuses = new Set<ActionStatus>([
-  "SUCCEEDED", "REJECTED", "FAILED", "TIMED_OUT", "CANCELLED",
+  "SUCCEEDED", "REJECTED", "FAILED", "TIMED_OUT", "CANCELLED", "INDETERMINATE",
 ]);
 
 const allowedTransitions: Readonly<Record<ActionStatus, readonly ActionStatus[]>> = {
   PENDING: ["AUTHORIZED", "REJECTED", "CANCELLED"],
   AUTHORIZED: ["VALIDATED", "REJECTED", "CANCELLED"],
   VALIDATED: ["EXECUTING", "REJECTED", "CANCELLED"],
-  EXECUTING: ["VERIFYING", "FAILED", "TIMED_OUT", "CANCELLED"],
-  VERIFYING: ["SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED"],
-  SUCCEEDED: [], REJECTED: [], FAILED: [], TIMED_OUT: [], CANCELLED: [],
+  EXECUTING: ["VERIFYING", "FAILED", "TIMED_OUT", "CANCELLED", "INDETERMINATE"],
+  VERIFYING: ["SUCCEEDED", "FAILED", "TIMED_OUT", "CANCELLED", "INDETERMINATE"],
+  SUCCEEDED: [], REJECTED: [], FAILED: [], TIMED_OUT: [], CANCELLED: [], INDETERMINATE: [],
 };
 
 export function transitionActionStatus(current: ActionStatus, next: ActionStatus): ActionStatus {
@@ -250,11 +263,19 @@ function validateTargetOwnership(snapshot: RegistryApplicationSnapshotReadRecord
 }
 
 export interface ApplicationActionExecutor {
-  execute(plan: ActionPlan): Promise<ActionExecutionResult>;
+  execute(plan: ActionPlan, context: MutationExecutionContext): Promise<ActionExecutionResult>;
 }
 
 export interface ActionVerifier {
-  verify(plan: ActionPlan, execution: ActionExecutionResult): Promise<VerificationResult>;
+  verify(plan: ActionPlan, execution: ActionExecutionResult, context: MutationExecutionContext): Promise<VerificationResult>;
+}
+
+export interface MutationExecutionContext {
+  signal: AbortSignal;
+  operationId: OperationId;
+  deadlineAt: Date;
+  operationKey: string;
+  fencingToken: number;
 }
 
 export interface OperationLockRepository {
@@ -363,14 +384,15 @@ export class InMemoryMutationAuditSink implements MutationAuditSink {
 
 export interface MutationOperationOutcome { result: ActionResult; replayed: boolean }
 
-export interface MutationOperationServiceOptions {
+export interface InMemoryMutationOperationServiceOptions {
   clock?: () => Date;
   operationIdFactory?: () => OperationId;
   lockTtlMs?: number;
   idempotencyTtlMs?: number;
 }
 
-export class MutationOperationService {
+/** Process-local test/dev coordinator retained for compatibility; never authoritative for production mutation. */
+export class InMemoryMutationOperationService {
   private readonly clock: () => Date;
   private readonly operationIdFactory: () => OperationId;
   private readonly lockTtlMs: number;
@@ -383,7 +405,7 @@ export class MutationOperationService {
     private readonly executor: ApplicationActionExecutor,
     private readonly verifier: ActionVerifier,
     private readonly audit: MutationAuditSink,
-    options: MutationOperationServiceOptions = {},
+    options: InMemoryMutationOperationServiceOptions = {},
   ) {
     this.clock = options.clock ?? (() => new Date());
     this.operationIdFactory = options.operationIdFactory ?? randomUUID;
@@ -417,13 +439,20 @@ export class MutationOperationService {
       try {
         let status = transitionActionStatus("VALIDATED", "EXECUTING");
         this.idempotency.update(plan.actor.id, plan.idempotencyKey, resultFor(plan, status, null));
-        const execution = await this.executor.execute(plan);
+        const executionContext: MutationExecutionContext = {
+          signal: new AbortController().signal,
+          operationId: plan.operationId,
+          deadlineAt: new Date(now.getTime() + this.lockTtlMs),
+          operationKey: plan.operationKey,
+          fencingToken: 0,
+        };
+        const execution = await this.executor.execute(plan, executionContext);
         if (!execution.accepted) throw new MutationError("EXECUTION_REJECTED", "The executor rejected the operation");
         status = transitionActionStatus(status, "VERIFYING");
         this.idempotency.update(plan.actor.id, plan.idempotencyKey, resultFor(plan, status, null));
         let verification: VerificationResult;
         try {
-          verification = await this.verifier.verify(plan, execution);
+          verification = await this.verifier.verify(plan, execution, executionContext);
         } catch {
           throw new MutationError("VERIFICATION_FAILED", "Operation verification failed");
         }

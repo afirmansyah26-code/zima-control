@@ -8,7 +8,7 @@ import {
   InMemoryMutationIdempotencyRepository,
   InMemoryOperationLockRepository,
   MutationError,
-  MutationOperationService,
+  InMemoryMutationOperationService,
   isTerminalActionStatus,
   transitionActionStatus,
   type ActionExecutionResult,
@@ -158,7 +158,7 @@ test("bounded idempotency store replays identical requests and rejects collision
 
 class RecordingExecutor implements ApplicationActionExecutor {
   public calls: ActionPlan[] = [];
-  public constructor(private readonly behavior: () => Promise<ActionExecutionResult> = async () => ({ accepted: true })) {}
+  public constructor(private readonly behavior: () => Promise<ActionExecutionResult> = async () => ({ accepted: true, outcome: "COMPLETED" })) {}
   public async execute(plan: ActionPlan): Promise<ActionExecutionResult> { this.calls.push(plan); return this.behavior(); }
 }
 const verified: ActionVerifier = { verify: async () => ({ verified: true }) };
@@ -168,7 +168,7 @@ function operationService(executor: ApplicationActionExecutor = new RecordingExe
   const locks = new InMemoryOperationLockRepository();
   const audit = new InMemoryMutationAuditSink();
   let sequence = 0;
-  const service = new MutationOperationService(new ActionPlanner(repository()), idempotency, locks, executor, verifier, audit, { clock: () => new Date(0), operationIdFactory: () => `operation-${++sequence}` });
+  const service = new InMemoryMutationOperationService(new ActionPlanner(repository()), idempotency, locks, executor, verifier, audit, { clock: () => new Date(0), operationIdFactory: () => `operation-${++sequence}` });
   return { service, idempotency, locks, audit };
 }
 
@@ -200,7 +200,7 @@ test("same actor and key with another action or target is a conflict and does no
 test("conflicting operations cannot execute concurrently and locks release after completion", async () => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
-  const executor = new RecordingExecutor(async () => { await gate; return { accepted: true }; });
+  const executor = new RecordingExecutor(async () => { await gate; return { accepted: true, outcome: "COMPLETED" }; });
   const { service, locks } = operationService(executor);
   const first = service.perform(operator, request({ idempotencyKey: "request-first" }));
   await new Promise((resolve) => setImmediate(resolve));

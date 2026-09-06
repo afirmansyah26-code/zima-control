@@ -148,3 +148,85 @@ model Session {
   @@index([userId])
   @@index([expiresAt])
 }
+
+model MutationOperation {
+  id                String    @id @default(uuid())
+  actorId           String
+  actorRole         String
+  action            String
+  applicationId     String
+  serviceId         String?
+  containerId       String?
+  executionDomain   String
+  operationKey      String
+  fingerprint       String
+  status            String
+  verificationState String    @default("NOT_STARTED")
+  recoveryState     String    @default("NONE")
+  fencingToken      Int?
+  reasonCode        String?
+  deadlineAt        DateTime
+  startedAt         DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  auditSequence     Int       @default(0)
+
+  idempotencyClaim MutationIdempotencyClaim?
+  auditEvents      MutationAuditEvent[]
+  ownedLock        MutationLock?
+
+  @@index([status, deadlineAt])
+  @@index([operationKey, status])
+  @@index([applicationId, createdAt])
+}
+
+model MutationIdempotencyClaim {
+  id             String   @id @default(uuid())
+  actorId        String
+  idempotencyKey String
+  fingerprint    String
+  operationId    String   @unique
+  expiresAt      DateTime
+  createdAt      DateTime @default(now())
+
+  operation MutationOperation @relation(fields: [operationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([actorId, idempotencyKey])
+  @@index([expiresAt])
+}
+
+model MutationLock {
+  operationKey     String    @id
+  ownerOperationId String?   @unique
+  fencingToken     Int       @default(0)
+  acquiredAt       DateTime?
+  leaseExpiresAt   DateTime?
+  updatedAt        DateTime  @updatedAt
+
+  ownerOperation MutationOperation? @relation(fields: [ownerOperationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@index([ownerOperationId])
+  @@index([leaseExpiresAt])
+}
+
+model MutationAuditEvent {
+  id            String   @id @default(uuid())
+  operationId   String
+  sequence      Int
+  actorId       String
+  actorRole     String
+  action        String
+  applicationId String
+  serviceId     String?
+  containerId   String?
+  status        String
+  eventType     String
+  reasonCode    String?
+  timestamp     DateTime
+
+  operation MutationOperation @relation(fields: [operationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([operationId, sequence])
+  @@index([timestamp])
+}

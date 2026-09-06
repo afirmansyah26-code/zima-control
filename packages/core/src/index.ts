@@ -49,15 +49,38 @@ export {
   InMemoryMutationIdempotencyRepository,
   InMemoryOperationLockRepository,
   MutationError,
-  MutationOperationService,
+  InMemoryMutationOperationService,
   actionStatuses,
   actionTypes,
   isTerminalActionStatus,
   transitionActionStatus,
 } from "./mutation-safety.js";
+export {
+  MutationOperationService,
+  MutationCrashSimulationError,
+  MutationRecoveryService,
+  mutationFingerprint,
+} from "./durable-mutation.js";
+export type {
+  DurableMutationAuditEvent,
+  DurableMutationClaim,
+  DurableMutationClaimInput,
+  DurableMutationOperation,
+  DurableMutationRepository,
+  DurableMutationServiceOptions,
+  DurableTransitionInput,
+  MutationAuditEventType,
+  MutationFailurePoint,
+  MutationLease,
+  RecoveryState,
+  VerificationState,
+} from "./durable-mutation.js";
+export { InMemoryDurableMutationRepository } from "./in-memory-durable-mutation-repository.js";
+export { PrismaDurableMutationRepository } from "./prisma-durable-mutation-repository.js";
 export type {
   Action,
   ActionExecutionResult,
+  ActionExecutionOutcome,
   ActionPlan,
   ActionRequest,
   ActionResult,
@@ -74,9 +97,10 @@ export type {
   MutationAuditEvent,
   MutationAuditSink,
   MutationErrorCode,
+  MutationExecutionContext,
   MutationIdempotencyRepository,
   MutationOperationOutcome,
-  MutationOperationServiceOptions,
+  InMemoryMutationOperationServiceOptions,
   MutationPolicy,
   MutationPolicyDecision,
   OperationId,
