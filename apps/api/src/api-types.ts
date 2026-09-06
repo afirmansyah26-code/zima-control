@@ -1,6 +1,11 @@
 export type {
   ApiErrorCode,
   ApiErrorResponse,
+  AuthLoginResponse,
+  AuthLogoutResponse,
+  AuthMeResponse,
+  AuthRole,
+  AuthUserResponse,
   ApplicationDeploymentResponse,
   ApplicationDetailResponse,
   ApplicationEnvironmentMetadataResponse,

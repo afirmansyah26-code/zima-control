@@ -72,6 +72,7 @@ export async function renderApplicationsPage(
   content: HTMLElement,
   api: RegistryApiClient,
   clock: Clock,
+  onUnauthorized?: () => void,
 ): Promise<void> {
   const document = content.ownerDocument;
   const heading = pageHeading(
@@ -111,7 +112,11 @@ export async function renderApplicationsPage(
     try {
       applications = [...await api.listApplications(selectedStatus)].sort(compareApplications);
       renderResults();
-    } catch {
+    } catch (error) {
+      if (error instanceof RegistryApiError && error.code === "UNAUTHENTICATED" && onUnauthorized) {
+        onUnauthorized();
+        return;
+      }
       results.setAttribute("aria-busy", "false");
       results.replaceChildren(errorState(
         document,
@@ -135,6 +140,7 @@ export async function renderApplicationDetailPage(
   api: RegistryApiClient,
   applicationId: string,
   clock: Clock,
+  onUnauthorized?: () => void,
 ): Promise<void> {
   const document = content.ownerDocument;
   const loading = loadingState(document, "Loading application detail");
@@ -144,6 +150,10 @@ export async function renderApplicationDetailPage(
     const detail = await api.getApplicationDetail(applicationId);
     content.replaceChildren(createApplicationDetail(document, detail, clock));
   } catch (error) {
+    if (error instanceof RegistryApiError && error.code === "UNAUTHENTICATED" && onUnauthorized) {
+      onUnauthorized();
+      return;
+    }
     if (error instanceof RegistryApiError && error.code === "NOT_FOUND") {
       content.replaceChildren(notFoundState(document));
       return;

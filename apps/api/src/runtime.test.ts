@@ -14,7 +14,17 @@ test("API runtime configuration validates required server-only values", () => {
     host: "0.0.0.0",
     port: 3000,
     databaseUrl: "file:/data/registry.db",
+    authCookieSecure: false,
+    trustForwardedProto: false,
   });
+  assert.equal(
+    readApiRuntimeConfig({ DATABASE_URL: "file:test.db", NODE_ENV: "production" }).authCookieSecure,
+    true,
+  );
+  assert.equal(
+    readApiRuntimeConfig({ DATABASE_URL: "file:test.db", TRUST_FORWARDED_PROTO: "true" }).trustForwardedProto,
+    true,
+  );
   assert.throws(() => readApiRuntimeConfig({}), (error) => (
     error instanceof ApiRuntimeConfigError
     && error.code === "MISSING_DATABASE_URL"
@@ -24,6 +34,14 @@ test("API runtime configuration validates required server-only values", () => {
   assert.throws(() => readApiRuntimeConfig({ DATABASE_URL: "file:test.db", PORT: "0" }), ApiRuntimeConfigError);
   assert.throws(() => readApiRuntimeConfig({ DATABASE_URL: "file:test.db", PORT: "abc" }), ApiRuntimeConfigError);
   assert.throws(() => readApiRuntimeConfig({ DATABASE_URL: "file:test.db", HOST: "bad host" }), ApiRuntimeConfigError);
+  assert.throws(
+    () => readApiRuntimeConfig({ DATABASE_URL: "file:test.db", AUTH_COOKIE_SECURE: "maybe" }),
+    (error) => error instanceof ApiRuntimeConfigError && error.code === "INVALID_AUTH_COOKIE_SETTING",
+  );
+  assert.throws(
+    () => readApiRuntimeConfig({ DATABASE_URL: "file:test.db", TRUST_FORWARDED_PROTO: "maybe" }),
+    (error) => error instanceof ApiRuntimeConfigError && error.code === "INVALID_PROXY_SETTING",
+  );
 });
 
 test("composed API exposes safe health and readiness without a listener", async () => {
@@ -56,6 +74,10 @@ test("startup log records contain only stable safe fields", () => {
   const serialized = JSON.stringify(safeLogRecord("error", "api_startup_failed", "INVALID_CONFIGURATION"));
   assert.match(serialized, /api_startup_failed/);
   assert.doesNotMatch(serialized, /DATABASE_URL|file:|password|token|secret/i);
+  assert.doesNotMatch(
+    JSON.stringify(safeLogRecord("error", "api_failed", "DATABASE_URL=secret")),
+    /DATABASE_URL|secret/i,
+  );
 });
 
 test("compiled API and package dependencies expose runnable JavaScript", async () => {

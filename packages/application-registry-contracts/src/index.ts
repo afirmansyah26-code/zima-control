@@ -82,9 +82,34 @@ export interface ApplicationDetailResponse {
   freshness: ApplicationFreshnessResponse;
 }
 
+export type AuthRole = "ADMIN" | "OPERATOR" | "VIEWER";
+
+export interface AuthUserResponse {
+  id: string;
+  username: string;
+  role: AuthRole;
+}
+
+export interface AuthMeResponse {
+  user: AuthUserResponse;
+}
+
+export interface AuthLoginResponse {
+  user: AuthUserResponse;
+}
+
+export interface AuthLogoutResponse {
+  loggedOut: true;
+}
+
 export type ApiErrorCode =
   | "APPLICATION_NOT_FOUND"
   | "INVALID_REQUEST"
+  | "AUTHENTICATION_REQUIRED"
+  | "INVALID_CREDENTIALS"
+  | "AUTHENTICATION_THROTTLED"
+  | "FORBIDDEN"
+  | "CSRF_REQUIRED"
   | "INTERNAL_ERROR";
 
 export interface ApiErrorResponse {

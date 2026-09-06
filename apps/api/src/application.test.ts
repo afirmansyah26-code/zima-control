@@ -9,8 +9,10 @@ import {
   type NormalizedApplication,
   type RegistryReadRepository,
   type RuntimeAuthority,
+  type AuthenticatedUser,
 } from "@zima-control-center/core";
 import { createApplicationRegistryApi } from "./application.js";
+import type { AuthenticationBoundary } from "./auth/http.js";
 import type {
   ApiErrorResponse,
   ApplicationDeploymentResponse,
@@ -115,9 +117,11 @@ async function createFixture() {
     observedAt,
   );
   const service = new ApplicationRegistryService(repository);
+  const auth = testAuthentication();
   return {
-    app: createApplicationRegistryApi(service),
+    app: createApplicationRegistryApi(service, { auth }),
     service,
+    auth,
     alphaId: alpha.id,
     zetaId: zeta.id,
   };
@@ -228,7 +232,7 @@ test("transport field allowlists discard an unexpected environment value", async
     getRuntimeContainers: service.getRuntimeContainers.bind(service),
     getApplicationEnvironmentMetadata: service.getApplicationEnvironmentMetadata.bind(service),
   };
-  const app = createApplicationRegistryApi(injectedService);
+  const app = createApplicationRegistryApi(injectedService, { auth: testAuthentication() });
   const response = await app.request(`/api/applications/${alphaId}/services`);
 
   assert.equal(response.status, 200);
@@ -316,7 +320,7 @@ test("repository and unexpected errors become safe 500 responses", async () => {
     },
   } as unknown as RegistryReadRepository;
   const service = new ApplicationRegistryService(failingRepository);
-  const app = createApplicationRegistryApi(service);
+  const app = createApplicationRegistryApi(service, { auth: testAuthentication() });
   const response = await app.request("/api/applications");
 
   assert.equal(response.status, 500);
@@ -336,7 +340,7 @@ test("repository and unexpected errors become safe 500 responses", async () => {
     getApplicationServices: service.getApplicationServices.bind(service),
     getRuntimeContainers: service.getRuntimeContainers.bind(service),
     getApplicationEnvironmentMetadata: service.getApplicationEnvironmentMetadata.bind(service),
-  });
+  }, { auth: testAuthentication() });
   const unexpectedResponse = await unexpectedApp.request("/api/applications");
   assert.equal(unexpectedResponse.status, 500);
   assertPublicResponse(await unexpectedResponse.text());
@@ -349,6 +353,23 @@ function assertPublicResponse(serialized: string): void {
   for (const value of secretValues) {
     assert.equal(serialized.includes(value), false, `secret value was exposed: ${value}`);
   }
+}
+
+function testAuthentication(): AuthenticationBoundary {
+  const user: AuthenticatedUser = { id: "test-user", username: "test-user", role: "VIEWER" };
+  return {
+    sessionCookieName: "test-session",
+    csrfCookieName: "test-csrf",
+    async login() {
+      throw new Error("not used");
+    },
+    async currentUser() {
+      return user;
+    },
+    async logout() {
+      throw new Error("not used");
+    },
+  };
 }
 
 function hasKey(value: unknown, key: string): boolean {

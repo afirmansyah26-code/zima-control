@@ -10,7 +10,9 @@ import {
   type ApplicationStatus,
   type ApplicationSummary,
 } from "@zima-control-center/core";
+import { AuthorizationError } from "@zima-control-center/core";
 import { Hono } from "hono";
+import type { Context } from "hono";
 import type {
   ApiErrorResponse,
   ApplicationDeploymentResponse,
@@ -21,6 +23,13 @@ import type {
   ApplicationServiceResponse,
   ApplicationSummaryResponse,
 } from "./api-types.js";
+import {
+  installAuthenticationRoutes,
+  requireRegistryRead,
+  type AuthenticationBoundary,
+  type AuthenticationRouteOptions,
+} from "./auth/http.js";
+import { AuthServiceError } from "./auth/service.js";
 
 export type ApplicationRegistryReadService = Pick<
   ApplicationRegistryService,
@@ -34,6 +43,8 @@ export type ApplicationRegistryReadService = Pick<
 
 export interface ApplicationRegistryApiOptions {
   readiness?: () => Promise<boolean>;
+  auth?: AuthenticationBoundary;
+  trustForwardedProto?: boolean;
 }
 
 /**
@@ -65,6 +76,20 @@ export function createApplicationRegistryApi(
       return context.json({ status: "not_ready", service: "api" }, 503);
     }
   });
+
+  if (options.auth) {
+    const authOptions: AuthenticationRouteOptions = {
+      trustForwardedProto: options.trustForwardedProto,
+    };
+    installAuthenticationRoutes(app, options.auth, authOptions);
+  }
+
+  const requireReadPermission = async (context: Context, next: () => Promise<void>) => {
+    await requireRegistryRead(context, options.auth);
+    await next();
+  };
+  app.use("/api/applications", requireReadPermission);
+  app.use("/api/applications/*", requireReadPermission);
 
   app.get("/api/applications", async (context) => {
     const options = parseListOptions(context.req.query("status"));
@@ -100,6 +125,29 @@ export function createApplicationRegistryApi(
   app.notFound((context) => context.json(errorResponse("INVALID_REQUEST", "Route not found"), 404));
 
   app.onError((error, context) => {
+    if (error instanceof AuthServiceError) {
+      switch (error.code) {
+        case "AUTHENTICATION_REQUIRED":
+          return context.json(errorResponse("AUTHENTICATION_REQUIRED", "Authentication required"), 401);
+        case "INVALID_CREDENTIALS":
+          return context.json(errorResponse("INVALID_CREDENTIALS", "Invalid username or password"), 401);
+        case "LOGIN_THROTTLED":
+          return context.json(errorResponse("AUTHENTICATION_THROTTLED", "Authentication is temporarily unavailable"), 429);
+        case "CSRF_REQUIRED":
+          return context.json(errorResponse("CSRF_REQUIRED", "Request protection is required"), 403);
+        case "INVALID_INPUT":
+          return context.json(errorResponse("INVALID_REQUEST", "Invalid request"), 400);
+        case "BOOTSTRAP_ALREADY_COMPLETE":
+          return context.json(errorResponse("FORBIDDEN", "Request is not allowed"), 403);
+        case "AUTHENTICATION_UNAVAILABLE":
+          return context.json(errorResponse("INTERNAL_ERROR", "Internal server error"), 500);
+      }
+    }
+    if (error instanceof AuthorizationError) {
+      return error.code === "AUTHENTICATION_REQUIRED"
+        ? context.json(errorResponse("AUTHENTICATION_REQUIRED", "Authentication required"), 401)
+        : context.json(errorResponse("FORBIDDEN", "Forbidden"), 403);
+    }
     if (error instanceof ApplicationRegistryServiceError) {
       switch (error.code) {
         case "APPLICATION_NOT_FOUND":

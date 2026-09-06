@@ -7,6 +7,8 @@ services:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must reference the persistent registry SQLite file}
       HOST: ${API_HOST:-0.0.0.0}
       PORT: ${API_PORT:-3000}
+      NODE_ENV: production
+      TRUST_FORWARDED_PROTO: "true"
     volumes:
       - registry-data:/data
     restart: unless-stopped

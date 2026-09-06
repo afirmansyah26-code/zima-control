@@ -82,8 +82,12 @@ export function safeLogRecord(
     service: "api",
     level,
     event,
-    ...(errorCode ? { errorCode } : {}),
+    ...(safeErrorCode(errorCode) ? { errorCode: safeErrorCode(errorCode) } : {}),
   };
+}
+
+function safeErrorCode(value: string | undefined): string | undefined {
+  return value && /^[A-Z0-9_]{1,64}$/.test(value) ? value : undefined;
 }
 
 function writeSafeLog(level: "info" | "error", event: string, errorCode?: string): void {

@@ -32,6 +32,22 @@ export { normalizeApplication, normalizeApplicationCandidate, normalizeName, nor
 export { PrismaRegistryRepository } from "./prisma-registry-repository.js";
 export { RegistryError } from "./registry-errors.js";
 export type { RegistryErrorCode } from "./registry-errors.js";
+export {
+  AuthorizationError,
+  canActAs,
+  hasPermission,
+  permissions,
+  requireAuthenticated,
+  requirePermission,
+  requireRole,
+  roles,
+} from "./auth-policy.js";
+export type {
+  AuthenticatedUser,
+  AuthorizationErrorCode,
+  Permission,
+  Role,
+} from "./auth-policy.js";
 export type {
   RegistryApplicationRecord,
   RegistryDeploymentRecord,

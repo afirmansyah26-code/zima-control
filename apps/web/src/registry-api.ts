@@ -26,7 +26,11 @@ export interface RegistryApiClient {
   getApplicationDetail(id: string): Promise<ApplicationDetailResponse>;
 }
 
-export type RegistryApiErrorCode = "NOT_FOUND" | "INVALID_RESPONSE" | "UNAVAILABLE";
+export type RegistryApiErrorCode =
+  | "NOT_FOUND"
+  | "UNAUTHENTICATED"
+  | "INVALID_RESPONSE"
+  | "UNAVAILABLE";
 
 export class RegistryApiError extends Error {
   public constructor(public readonly code: RegistryApiErrorCode, message: string) {
@@ -114,6 +118,9 @@ async function fetchJson(
   if (!response.ok) {
     if (response.status === 404) {
       throw new RegistryApiError("NOT_FOUND", "Application was not found");
+    }
+    if (response.status === 401) {
+      throw new RegistryApiError("UNAUTHENTICATED", "Authentication is required");
     }
     throw new RegistryApiError("UNAVAILABLE", "Application registry request failed");
   }

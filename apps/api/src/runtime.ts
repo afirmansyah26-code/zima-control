@@ -6,6 +6,11 @@ import {
 } from "@zima-control-center/core";
 import type { Hono } from "hono";
 import { createApplicationRegistryApi } from "./application.js";
+import {
+  AuthenticationService,
+} from "./auth/service.js";
+import { PrismaAuthRepository } from "./auth/prisma-auth-repository.js";
+import type { AuthenticationBoundary } from "./auth/http.js";
 
 export interface EnvironmentSource {
   readonly [name: string]: string | undefined;
@@ -15,13 +20,17 @@ export interface ApiRuntimeConfig {
   host: string;
   port: number;
   databaseUrl: string;
+  authCookieSecure: boolean;
+  trustForwardedProto: boolean;
 }
 
 export type ApiRuntimeConfigErrorCode =
   | "MISSING_DATABASE_URL"
   | "INVALID_DATABASE_URL"
   | "INVALID_HOST"
-  | "INVALID_PORT";
+  | "INVALID_PORT"
+  | "INVALID_AUTH_COOKIE_SETTING"
+  | "INVALID_PROXY_SETTING";
 
 export class ApiRuntimeConfigError extends Error {
   public constructor(public readonly code: ApiRuntimeConfigErrorCode) {
@@ -58,16 +67,30 @@ export function readApiRuntimeConfig(environment: EnvironmentSource): ApiRuntime
     throw new ApiRuntimeConfigError("INVALID_PORT");
   }
 
-  return { host, port, databaseUrl };
+  const secureCookieSetting = environment.AUTH_COOKIE_SECURE?.trim().toLowerCase();
+  if (secureCookieSetting !== undefined && secureCookieSetting !== "true" && secureCookieSetting !== "false") {
+    throw new ApiRuntimeConfigError("INVALID_AUTH_COOKIE_SETTING");
+  }
+  const authCookieSecure = environment.NODE_ENV?.trim().toLowerCase() === "production"
+    || secureCookieSetting === "true";
+  const proxySetting = environment.TRUST_FORWARDED_PROTO?.trim().toLowerCase();
+  if (proxySetting !== undefined && proxySetting !== "true" && proxySetting !== "false") {
+    throw new ApiRuntimeConfigError("INVALID_PROXY_SETTING");
+  }
+  const trustForwardedProto = proxySetting === "true";
+
+  return { host, port, databaseUrl, authCookieSecure, trustForwardedProto };
 }
 
 export function composeApplicationRegistryApi(
   repository: RegistryReadRepository,
   readiness: () => Promise<boolean> = async () => true,
+  auth?: AuthenticationBoundary,
+  trustForwardedProto = false,
 ): Hono {
   return createApplicationRegistryApi(
     new ApplicationRegistryService(repository),
-    { readiness },
+    { readiness, auth, trustForwardedProto },
   );
 }
 
@@ -76,14 +99,21 @@ export function createApiRuntime(config: ApiRuntimeConfig): ApiRuntime {
     datasources: { db: { url: config.databaseUrl } },
   });
   const repository = new PrismaRegistryRepository(prisma);
+  const authentication = new AuthenticationService(
+    new PrismaAuthRepository(prisma),
+    { secureCookies: config.authCookieSecure },
+  );
   const app = composeApplicationRegistryApi(repository, async () => {
     try {
-      await prisma.$queryRaw`SELECT 1`;
+      // A connectivity-only probe would report an empty, unprovisioned SQLite
+      // file as ready. Check both registry and auth tables without mutating them.
+      await prisma.application.count();
+      await prisma.user.count();
       return true;
     } catch {
       return false;
     }
-  });
+  }, authentication, config.trustForwardedProto);
 
   return {
     app,
