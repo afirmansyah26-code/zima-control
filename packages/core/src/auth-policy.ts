@@ -1,7 +1,13 @@
 export const roles = ["ADMIN", "OPERATOR", "VIEWER"] as const;
 export type Role = (typeof roles)[number];
 
-export const permissions = ["registry:read", "auth:admin"] as const;
+export const permissions = [
+  "registry:read",
+  "application:start",
+  "application:stop",
+  "application:restart",
+  "auth:admin",
+] as const;
 export type Permission = (typeof permissions)[number];
 
 export interface AuthenticatedUser {
@@ -52,6 +58,10 @@ export function hasPermission(role: Role, permission: Permission): boolean {
   switch (permission) {
     case "registry:read":
       return canActAs(role, "VIEWER");
+    case "application:start":
+    case "application:stop":
+    case "application:restart":
+      return canActAs(role, "OPERATOR");
     case "auth:admin":
       return canActAs(role, "ADMIN");
   }

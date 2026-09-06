@@ -22,6 +22,18 @@ test("registry read permission is available to every defined role", () => {
   assert.equal(hasPermission("ADMIN", "auth:admin"), true);
 });
 
+test("operational permissions deny viewers and allow operators and administrators", () => {
+  for (const permission of [
+    "application:start",
+    "application:stop",
+    "application:restart",
+  ] as const) {
+    assert.equal(hasPermission("VIEWER", permission), false);
+    assert.equal(hasPermission("OPERATOR", permission), true);
+    assert.equal(hasPermission("ADMIN", permission), true);
+  }
+});
+
 test("authorization policy keeps authentication and role failures explicit", () => {
   assert.equal(requireAuthenticated(viewer), viewer);
   assert.equal(requirePermission(viewer, "registry:read"), viewer);
