@@ -163,6 +163,7 @@ model MutationOperation {
   status            String
   verificationState String    @default("NOT_STARTED")
   recoveryState     String    @default("NONE")
+  externalEffect    String    @default("NOT_STARTED")
   fencingToken      Int?
   reasonCode        String?
   deadlineAt        DateTime
@@ -174,11 +175,52 @@ model MutationOperation {
 
   idempotencyClaim MutationIdempotencyClaim?
   auditEvents      MutationAuditEvent[]
+  steps            MutationOperationStep[]
   ownedLock        MutationLock?
 
   @@index([status, deadlineAt])
   @@index([operationKey, status])
   @@index([applicationId, createdAt])
+}
+
+model MutationOperationStep {
+  id                         String    @id @default(uuid())
+  parentOperationId          String
+  sequence                   Int
+  applicationId              String
+  deploymentId               String
+  serviceId                  String
+  containerId                String
+  action                     String
+  executionDomain            String
+  targetFingerprint          String
+  snapshotAt                 DateTime
+  authorityEvidence          String
+  applicationDiscoveredAt    DateTime
+  deploymentDiscoveredAt     DateTime
+  runtimeObservedAt          DateTime
+  deadlineAt                 DateTime
+  status                     String    @default("VALIDATED")
+  verificationState          String    @default("NOT_STARTED")
+  recoveryState              String    @default("NONE")
+  externalEffect             String    @default("NOT_STARTED")
+  fencingToken               Int?
+  dispatchFencingToken       Int?
+  dispatchAuthorizedAt       DateTime?
+  reasonCode                 String?
+  startedAt                  DateTime?
+  completedAt                DateTime?
+  createdAt                  DateTime  @default(now())
+  updatedAt                  DateTime  @updatedAt
+
+  parentOperation MutationOperation   @relation(fields: [parentOperationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  auditEvents     MutationAuditEvent[]
+
+  @@unique([parentOperationId, sequence])
+  @@unique([parentOperationId, containerId])
+  @@index([parentOperationId, status])
+  @@index([status, deadlineAt])
+  @@index([containerId, status])
 }
 
 model MutationIdempotencyClaim {
@@ -213,6 +255,7 @@ model MutationLock {
 model MutationAuditEvent {
   id            String   @id @default(uuid())
   operationId   String
+  childStepId   String?
   sequence      Int
   actorId       String
   actorRole     String
@@ -225,8 +268,10 @@ model MutationAuditEvent {
   reasonCode    String?
   timestamp     DateTime
 
-  operation MutationOperation @relation(fields: [operationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  operation MutationOperation      @relation(fields: [operationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  childStep MutationOperationStep? @relation(fields: [childStepId], references: [id], onDelete: Restrict, onUpdate: Restrict)
 
   @@unique([operationId, sequence])
+  @@index([childStepId])
   @@index([timestamp])
 }

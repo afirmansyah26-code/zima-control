@@ -42,6 +42,13 @@ export interface ActionRequest extends Action {
   idempotencyKey: IdempotencyKey;
 }
 
+export interface AuthorizedApplicationMutationRequest {
+  actor: Readonly<{ id: string; role: Role }>;
+  action: ActionType;
+  applicationId: string;
+  idempotencyKey: IdempotencyKey;
+}
+
 export interface ActionPlan {
   operationId: OperationId;
   actor: Readonly<{ id: string; role: Role }>;
@@ -109,6 +116,10 @@ export type MutationErrorCode =
   | "DOCKER_TIMEOUT"
   | "POST_ACTION_VERIFICATION_FAILED"
   | "MUTATION_UNCERTAIN"
+  | "APPLICATION_RUNTIME_UNAVAILABLE"
+  | "APPLICATION_SHAPE_UNSUPPORTED"
+  | "TARGET_SNAPSHOT_NOT_AUTHORITATIVE"
+  | "TARGET_SNAPSHOT_STALE"
   | "NOT_IMPLEMENTED";
 
 export class MutationError extends Error {
@@ -170,6 +181,31 @@ export class ActionPlanner {
     private readonly repository: RegistryReadRepository,
     private readonly policy: MutationPolicy = new DefaultMutationPolicy(),
   ) {}
+
+  /** Authorization-only application boundary used before idempotency replay lookup. */
+  public authorizeApplicationRequest(actor: Actor | null, request: ActionRequest): AuthorizedApplicationMutationRequest {
+    let authenticated: AuthenticatedUser;
+    try {
+      authenticated = requireAuthenticated(actor);
+    } catch (error) {
+      throw mapAuthorizationError(error);
+    }
+    validateRequest(request);
+    if (request.target.serviceId !== undefined || request.target.containerId !== undefined) {
+      throw new MutationError("INVALID_TARGET", "Application mutations cannot accept a physical child target");
+    }
+    try {
+      authenticated = requirePermission(authenticated, permissionFor(request.action));
+    } catch (error) {
+      throw mapAuthorizationError(error);
+    }
+    return Object.freeze({
+      actor: Object.freeze({ id: authenticated.id, role: authenticated.role }),
+      action: request.action,
+      applicationId: request.target.applicationId,
+      idempotencyKey: request.idempotencyKey,
+    });
+  }
 
   public async plan(
     actor: Actor | null,
