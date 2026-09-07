@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PrismaClient } from "@prisma/client";
-import { after, before, test } from "node:test";
+import { afterEach, beforeEach, test } from "node:test";
 import { MutationRecoveryService, mutationFingerprint, type DurableMutationClaimInput } from "./durable-mutation.js";
 import { PrismaDurableMutationRepository } from "./prisma-durable-mutation-repository.js";
 import { MutationError, type ActionPlan } from "./mutation-safety.js";
@@ -13,20 +13,26 @@ let databaseUrl: string;
 let prisma: PrismaClient;
 let repository: PrismaDurableMutationRepository;
 
-before(async () => {
+beforeEach(async () => {
   directory = await mkdtemp(join(tmpdir(), "zima-durable-mutation-"));
   databaseUrl = `file:${join(directory, "mutation.db").replaceAll("\\", "/")}`;
   prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
   await createSchema(prisma);
   repository = new PrismaDurableMutationRepository(prisma);
 });
-after(async () => { await prisma.$disconnect(); await rm(directory, { recursive: true, force: true }); });
+afterEach(async () => { await prisma.$disconnect(); await rm(directory, { recursive: true, force: true }); });
 
 function plan(id = "operation-a", actorId = "actor-a", action: ActionPlan["action"] = "RESTART", operationKey = "application:app-a"): ActionPlan {
   return { operationId: id, actor: { id: actorId, role: "OPERATOR" }, action, target: { applicationId: operationKey.slice("application:".length) }, executionDomain: "DOCKER", operationKey, idempotencyKey: "request-0001" };
 }
 function input(value: ActionPlan = plan(), now = new Date(0)): DurableMutationClaimInput {
   return { plan: value, fingerprint: mutationFingerprint(value), now, idempotencyExpiresAt: new Date(now.getTime() + 86_400_000), deadlineAt: new Date(now.getTime() + 60_000) };
+}
+function fulfilled<T>(results: PromiseSettledResult<T>[]): T[] {
+  return results.map((result) => {
+    if (result.status === "rejected") throw result.reason;
+    return result.value;
+  });
 }
 
 test("Prisma claim and operation survive repository/process recreation", async () => {
@@ -37,10 +43,13 @@ test("Prisma claim and operation survive repository/process recreation", async (
     const replay = await nextRepository.claim(input(plan("operation-unused")));
     assert.equal(replay.kind, "replay");
     assert.equal(replay.operation.id, "operation-a");
+    const events = await nextRepository.listAuditEvents("operation-a");
+    assert.deepEqual(events.map((event) => [event.sequence, event.eventType]), [[1, "CLAIMED"], [2, "REPLAYED"]]);
   } finally { await restarted.$disconnect(); }
 });
 
 test("Prisma durable claim rejects fingerprint collision and scopes different actors", async () => {
+  await repository.claim(input());
   await assert.rejects(repository.claim(input(plan("operation-conflict", "actor-a", "STOP"))), (error) => error instanceof MutationError && error.code === "IDEMPOTENCY_CONFLICT");
   assert.equal((await repository.claim(input(plan("operation-other", "actor-b")))).kind, "created");
 });
@@ -64,12 +73,14 @@ test("concurrent Prisma claims converge on one durable operation", async () => {
     const secondRepository = new PrismaDurableMutationRepository(secondClient);
     const firstPlan = { ...plan("operation-race-a", "actor-race"), idempotencyKey: "request-race" };
     const secondPlan = { ...plan("operation-race-b", "actor-race"), idempotencyKey: "request-race" };
-    const [first, second] = await Promise.all([
+    const [first, second] = fulfilled(await Promise.allSettled([
       firstRepository.claim(input(firstPlan)),
       secondRepository.claim(input(secondPlan)),
-    ]);
+    ]));
     assert.equal(new Set([first.operation.id, second.operation.id]).size, 1);
     assert.deepEqual([first.kind, second.kind].sort(), ["created", "replay"]);
+    assert.equal(await prisma.mutationOperation.count({ where: { actorId: "actor-race" } }), 1);
+    assert.equal(await prisma.mutationIdempotencyClaim.count({ where: { actorId: "actor-race", idempotencyKey: "request-race" } }), 1);
   } finally { await Promise.all([firstClient.$disconnect(), secondClient.$disconnect()]); }
 });
 
@@ -80,6 +91,7 @@ test("Prisma lock acquisition is exclusive, owner checked, explicitly released, 
   await repository.claim(input(secondValue));
   const first = await repository.acquireLease("application:lock", firstValue.operationId, new Date(0), new Date(100));
   assert.ok(first);
+  assert.deepEqual(await repository.acquireLease("application:lock", firstValue.operationId, new Date(1), new Date(100)), first);
   assert.equal(await repository.acquireLease("application:lock", secondValue.operationId, new Date(1), new Date(100)), null);
   assert.equal(await repository.releaseLease({ ...first, ownerOperationId: "wrong" }), false);
   await repository.transitionWithAudit({ operationId: firstValue.operationId, expected: ["VALIDATED"], status: "REJECTED", now: new Date(2), eventType: "FAILED", ownership: first, releaseLease: true });
@@ -95,22 +107,23 @@ test("concurrent Prisma lock acquisition has exactly one owner", async () => {
     const secondValue = { ...plan("operation-race-lock-b", "actor-race-lock-b", "RESTART", "application:race-lock"), idempotencyKey: "request-race-lock-b" };
     await repository.claim(input(firstValue));
     await repository.claim(input(secondValue));
-    const results = await Promise.all([
+    const results = fulfilled(await Promise.allSettled([
       repository.acquireLease("application:race-lock", firstValue.operationId, new Date(0), new Date(100)),
       otherRepository.acquireLease("application:race-lock", secondValue.operationId, new Date(0), new Date(100)),
-    ]);
+    ]));
     assert.equal(results.filter(Boolean).length, 1);
   } finally { await another.$disconnect(); }
 });
 
 test("Prisma state and ordered audit persist atomically", async () => {
+  await repository.claim(input());
   const lease = await repository.acquireLease("application:app-a", "operation-a", new Date(1), new Date(100));
   assert.ok(lease);
   const changed = await repository.transitionWithAudit({ operationId: "operation-a", expected: ["VALIDATED"], status: "EXECUTING", now: new Date(1), eventType: "STATE_CHANGED", startedAt: new Date(1), ownership: lease });
   assert.equal(changed.status, "EXECUTING");
   await repository.transitionWithAudit({ operationId: "operation-a", expected: ["EXECUTING"], status: "INDETERMINATE", now: new Date(2), eventType: "RECOVERED", reasonCode: "RECOVERY_OUTCOME_UNKNOWN", verificationState: "UNKNOWN", recoveryState: "OUTCOME_UNKNOWN", completedAt: new Date(2), ownership: lease });
   const events = await repository.listAuditEvents("operation-a");
-  assert.deepEqual(events.map((event) => event.sequence), [1, 2, 3, 4]);
+  assert.deepEqual(events.map((event) => event.sequence), [1, 2, 3]);
   assert.equal((await repository.findOperation("operation-a"))?.status, "INDETERMINATE");
   assert.doesNotMatch(JSON.stringify(events), /password|session|cookie|command|DATABASE_URL/i);
 });
@@ -132,9 +145,51 @@ test("Prisma dispatch authorization is atomic, one-time, target-bound, and stale
     const authorization = { operationId: value.operationId, operationKey: value.operationKey, fencingToken: lease.fencingToken, action: value.action, applicationId: value.target.applicationId, serviceId: value.target.serviceId ?? null, containerId: exactContainerId, executionDomain: value.executionDomain, now: new Date(2) };
     const attempts = await Promise.allSettled([repository.authorizeDispatch(authorization), otherRepository.authorizeDispatch(authorization)]);
     assert.equal(attempts.filter((attempt) => attempt.status === "fulfilled").length, 1);
+    const authorized = attempts.find((attempt): attempt is PromiseFulfilledResult<Awaited<ReturnType<typeof repository.authorizeDispatch>>> => attempt.status === "fulfilled");
+    assert.ok(authorized);
+    const committed = await prisma.mutationOperation.findUniqueOrThrow({ where: { id: value.operationId } });
+    assert.equal(Reflect.get(authorized.value, "auditSequence"), committed.auditSequence);
+    assert.equal(committed.auditSequence, 3);
     assert.equal((await repository.listAuditEvents(value.operationId)).filter((event) => event.eventType === "DISPATCH_AUTHORIZED").length, 1);
     await assert.rejects(repository.authorizeDispatch({ ...authorization, serviceId: "foreign-service", now: new Date(3) }), (error) => error instanceof MutationError && error.code === "STALE_OPERATION_OWNERSHIP");
   } finally { await another.$disconnect(); }
+});
+
+test("Prisma dispatch requires an active lease and rolls back when its audit cannot commit", async () => {
+  const exactContainerId = "c".repeat(64);
+  const value: ActionPlan = {
+    ...plan("operation-dispatch-audit", "actor-dispatch-audit", "START", "application:dispatch-audit"),
+    target: { applicationId: "dispatch-audit", containerId: exactContainerId },
+    idempotencyKey: "request-dispatch-audit",
+  };
+  await repository.claim(input(value));
+  const lease = await repository.acquireLease(value.operationKey, value.operationId, new Date(0), new Date(10));
+  assert.ok(lease);
+  await repository.transitionWithAudit({ operationId: value.operationId, expected: ["VALIDATED"], status: "EXECUTING", now: new Date(1), eventType: "STATE_CHANGED", ownership: lease });
+  const authorization = { operationId: value.operationId, operationKey: value.operationKey, fencingToken: lease.fencingToken, action: value.action, applicationId: value.target.applicationId, serviceId: null, containerId: exactContainerId, executionDomain: value.executionDomain, now: new Date(2) };
+  await assert.rejects(repository.authorizeDispatch({ ...authorization, now: new Date(10) }), (error) => error instanceof MutationError && error.code === "STALE_OPERATION_OWNERSHIP");
+
+  const before = await prisma.mutationOperation.findUniqueOrThrow({ where: { id: value.operationId } });
+  await prisma.mutationAuditEvent.create({
+    data: {
+      operationId: value.operationId,
+      sequence: before.auditSequence + 1,
+      actorId: value.actor.id,
+      actorRole: value.actor.role,
+      action: value.action,
+      applicationId: value.target.applicationId,
+      serviceId: null,
+      containerId: exactContainerId,
+      status: "EXECUTING",
+      eventType: "STATE_CHANGED",
+      reasonCode: null,
+      timestamp: new Date(2),
+    },
+  });
+  await assert.rejects(repository.authorizeDispatch(authorization), (error) => error instanceof MutationError && error.code === "PERSISTENCE_FAILED");
+  const after = await prisma.mutationOperation.findUniqueOrThrow({ where: { id: value.operationId } });
+  assert.equal(after.auditSequence, before.auditSequence);
+  assert.equal(await prisma.mutationAuditEvent.count({ where: { operationId: value.operationId, eventType: "DISPATCH_AUTHORIZED" } }), 0);
 });
 
 test("Prisma recovery takeover prevents dispatch under the previous fencing epoch", async () => {
@@ -214,6 +269,23 @@ test("Prisma INDETERMINATE ownership remains blocking after lease expiry", async
   assert.equal(await new MutationRecoveryService(repository, () => new Date(100)).recover(), 0);
 });
 
+test("concurrent Prisma recovery enumeration uses advisory autocommit reads", async () => {
+  const value = { ...plan("operation-recovery-enumeration", "actor-recovery-enumeration", "RESTART", "application:recovery-enumeration"), idempotencyKey: "request-recovery-enumeration" };
+  await repository.claim(input(value));
+  const original = await repository.acquireLease(value.operationKey, value.operationId, new Date(0), new Date(10));
+  assert.ok(original);
+  const another = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+  try {
+    const otherRepository = new PrismaDurableMutationRepository(another);
+    const candidates = fulfilled(await Promise.allSettled([
+      repository.listRecoverable(new Date(11)),
+      otherRepository.listRecoverable(new Date(11)),
+    ]));
+    assert.deepEqual(candidates.map((operations) => operations.map((operation) => operation.id)), [[value.operationId], [value.operationId]]);
+    assert.equal((await repository.findOperation(value.operationId))?.status, "VALIDATED");
+  } finally { await another.$disconnect(); }
+});
+
 test("concurrent Prisma recovery clients elect one recovery owner", async () => {
   const value = { ...plan("operation-recovery-race", "actor-recovery-race", "RESTART", "application:recovery-race"), idempotencyKey: "request-recovery-race" };
   await repository.claim(input(value));
@@ -221,10 +293,10 @@ test("concurrent Prisma recovery clients elect one recovery owner", async () => 
   assert.ok(original);
   const another = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
   try {
-    const results = await Promise.all([
+    const results = fulfilled(await Promise.allSettled([
       new MutationRecoveryService(repository, () => new Date(11)).recover(),
       new MutationRecoveryService(new PrismaDurableMutationRepository(another), () => new Date(11)).recover(),
-    ]);
+    ]));
     assert.equal(results.reduce((total, value) => total + value, 0), 1);
     assert.equal((await repository.findOperation(value.operationId))?.status, "REJECTED");
   } finally { await another.$disconnect(); }
