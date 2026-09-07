@@ -20,7 +20,7 @@ import {
 
 export type VerificationState = "NOT_STARTED" | "PENDING" | "VERIFIED" | "FAILED" | "UNKNOWN";
 export type RecoveryState = "NONE" | "RECOVERED_PRE_EXECUTION" | "OUTCOME_UNKNOWN";
-export type MutationAuditEventType = "CLAIMED" | "STATE_CHANGED" | "COMPLETED" | "FAILED" | "RECOVERED" | "REPLAYED";
+export type MutationAuditEventType = "CLAIMED" | "DISPATCH_AUTHORIZED" | "STATE_CHANGED" | "COMPLETED" | "FAILED" | "RECOVERED" | "REPLAYED";
 
 export interface DurableMutationOperation {
   id: string;
@@ -99,10 +99,24 @@ export interface DurableTransitionInput {
   releaseLease?: boolean;
 }
 
+export interface MutationDispatchAuthorizationInput {
+  operationId: string;
+  operationKey: string;
+  fencingToken: number;
+  action: ActionType;
+  applicationId: string;
+  serviceId: string | null;
+  containerId: string;
+  executionDomain: Exclude<ExecutionDomain, "UNSUPPORTED">;
+  now: Date;
+}
+
 /** Transactional persistence boundary. Implementations must atomically update state and append audit. */
 export interface DurableMutationRepository {
   claim(input: DurableMutationClaimInput): Promise<DurableMutationClaim>;
   findOperation(operationId: string): Promise<DurableMutationOperation | null>;
+  /** Atomically fences and records the final authorization immediately before external dispatch. */
+  authorizeDispatch(input: MutationDispatchAuthorizationInput): Promise<DurableMutationOperation>;
   transitionWithAudit(input: DurableTransitionInput): Promise<DurableMutationOperation>;
   acquireLease(operationKey: string, operationId: string, now: Date, leaseExpiresAt: Date): Promise<MutationLease | null>;
   acquireRecoveryLease(operationKey: string, operationId: string, now: Date, leaseExpiresAt: Date): Promise<MutationLease | null>;
@@ -209,7 +223,14 @@ export class MutationOperationService {
           if (attempt.acknowledgement?.status === "fulfilled" && isSafePreEffectOutcome(attempt.acknowledgement.value.outcome)) {
             await this.markTimedOut(operation.id, "EXECUTING", lease);
           } else {
-            await this.markIndeterminate(operation.id, "EXECUTING", lease);
+            await this.markIndeterminate(
+              operation.id,
+              "EXECUTING",
+              lease,
+              attempt.acknowledgement?.status === "fulfilled"
+                ? attempt.acknowledgement.value.errorCode ?? "MUTATION_UNCERTAIN"
+                : "MUTATION_UNCERTAIN",
+            );
           }
           throw new MutationError("OPERATION_TIMED_OUT", "The operation timed out");
         }
@@ -221,11 +242,12 @@ export class MutationOperationService {
       }
       await this.hit("afterExecutorBeforePersist");
       if (!execution.accepted && isSafePreEffectOutcome(execution.outcome)) {
-        await this.repository.transitionWithAudit({ operationId: operation.id, expected: ["EXECUTING"], status: "FAILED", now: this.clock(), eventType: "FAILED", reasonCode: "EXECUTION_REJECTED", completedAt: this.clock(), ownership: lease, releaseLease: true });
-        throw new MutationError("EXECUTION_REJECTED", "The executor rejected the operation");
+        const errorCode = execution.errorCode ?? "EXECUTION_REJECTED";
+        await this.repository.transitionWithAudit({ operationId: operation.id, expected: ["EXECUTING"], status: "FAILED", now: this.clock(), eventType: "FAILED", reasonCode: errorCode, completedAt: this.clock(), ownership: lease, releaseLease: true });
+        throw new MutationError(errorCode, "The executor rejected the operation");
       }
       if (!execution.accepted || execution.outcome !== "COMPLETED") {
-        await this.markIndeterminate(operation.id, "EXECUTING", lease);
+        await this.markIndeterminate(operation.id, "EXECUTING", lease, execution.errorCode ?? "MUTATION_UNCERTAIN");
         throw new MutationError("EXECUTION_FAILED", "The external operation outcome is unknown");
       }
       await this.safe(() => this.repository.transitionWithAudit({ operationId: operation.id, expected: ["EXECUTING"], status: "VERIFYING", now: this.clock(), eventType: "STATE_CHANGED", verificationState: "PENDING", ownership: lease }));
@@ -245,8 +267,13 @@ export class MutationOperationService {
       }
       await this.hit("afterVerification");
       if (!verification.verified) {
-        await this.repository.transitionWithAudit({ operationId: operation.id, expected: ["VERIFYING"], status: "FAILED", now: this.clock(), eventType: "FAILED", reasonCode: "VERIFICATION_FAILED", verificationState: "FAILED", completedAt: this.clock(), ownership: lease, releaseLease: true });
-        throw new MutationError("VERIFICATION_FAILED", "Operation verification failed");
+        const errorCode = verification.errorCode ?? "VERIFICATION_FAILED";
+        if (verification.outcome === "UNKNOWN") {
+          await this.markIndeterminate(operation.id, "VERIFYING", lease, errorCode);
+        } else {
+          await this.repository.transitionWithAudit({ operationId: operation.id, expected: ["VERIFYING"], status: "FAILED", now: this.clock(), eventType: "FAILED", reasonCode: errorCode, verificationState: "FAILED", completedAt: this.clock(), ownership: lease, releaseLease: true });
+        }
+        throw new MutationError(errorCode, "Operation verification failed");
       }
       await this.hit("beforeFinalAudit");
       const completed = await this.safe(() => this.repository.transitionWithAudit({
@@ -257,8 +284,8 @@ export class MutationOperationService {
     } catch (error) { throw error; }
   }
 
-  private async markIndeterminate(operationId: string, expected: ActionStatus, lease: MutationLease): Promise<void> {
-    await this.repository.transitionWithAudit({ operationId, expected: [expected], status: "INDETERMINATE", now: this.clock(), eventType: "FAILED", reasonCode: "RECOVERY_OUTCOME_UNKNOWN", verificationState: "UNKNOWN", recoveryState: "OUTCOME_UNKNOWN", completedAt: this.clock(), ownership: lease });
+  private async markIndeterminate(operationId: string, expected: ActionStatus, lease: MutationLease, reasonCode: MutationErrorCode = "RECOVERY_OUTCOME_UNKNOWN"): Promise<void> {
+    await this.repository.transitionWithAudit({ operationId, expected: [expected], status: "INDETERMINATE", now: this.clock(), eventType: "FAILED", reasonCode, verificationState: "UNKNOWN", recoveryState: "OUTCOME_UNKNOWN", completedAt: this.clock(), ownership: lease });
   }
   private async markTimedOut(operationId: string, expected: ActionStatus, lease: MutationLease): Promise<void> {
     await this.repository.transitionWithAudit({ operationId, expected: [expected], status: "TIMED_OUT", now: this.clock(), eventType: "FAILED", reasonCode: "OPERATION_TIMED_OUT", verificationState: "UNKNOWN", recoveryState: "NONE", completedAt: this.clock(), ownership: lease, releaseLease: true });

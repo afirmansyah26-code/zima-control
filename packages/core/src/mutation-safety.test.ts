@@ -63,8 +63,8 @@ test("planner reuses authorization policy for viewer, operator, admin, and anony
   const planner = new ActionPlanner(repository());
   await rejectsCode(planner.plan(viewer, request()), "UNAUTHORIZED");
   await rejectsCode(planner.plan(null, request()), "AUTHENTICATION_REQUIRED");
-  assert.equal((await planner.plan(operator, request())).executionDomain, "ZIMAOS");
-  assert.equal((await planner.plan(admin, request())).executionDomain, "ZIMAOS");
+  assert.equal((await planner.plan(operator, request())).executionDomain, "DOCKER");
+  assert.equal((await planner.plan(admin, request())).executionDomain, "DOCKER");
 });
 
 test("planner rejects missing and cross-application targets", async () => {
@@ -94,7 +94,7 @@ test("management policy denies unsupported, external, and uncontrolled applicati
     const planner = new ActionPlanner(repository(snapshot(application)));
     await assert.rejects(planner.plan(operator, request()), (error) => error instanceof MutationError && ["UNSUPPORTED_RUNTIME", "UNSUPPORTED_MANAGEMENT"].includes(error.code));
   }
-  assert.deepEqual(new DefaultMutationPolicy().evaluate(snapshot().application), { allowed: true, executionDomain: "ZIMAOS" });
+  assert.deepEqual(new DefaultMutationPolicy().evaluate(snapshot().application), { allowed: true, executionDomain: "DOCKER" });
 });
 
 test("planner validates action, identifiers, and bounded idempotency keys", async () => {
@@ -110,7 +110,7 @@ test("authentication is enforced before mutation request details are validated",
 
 test("action plans are declarative, scoped, frozen, and contain no executable or credential material", async () => {
   const plan = await new ActionPlanner(repository()).plan(operator, request(), "operation-a");
-  assert.deepEqual(plan, { operationId: "operation-a", actor: { id: "operator", role: "OPERATOR" }, action: "RESTART", target: { applicationId: "app-a" }, executionDomain: "ZIMAOS", operationKey: "application:app-a", idempotencyKey: "request-0001" });
+  assert.deepEqual(plan, { operationId: "operation-a", actor: { id: "operator", role: "OPERATOR" }, action: "RESTART", target: { applicationId: "app-a" }, executionDomain: "DOCKER", operationKey: "application:app-a", idempotencyKey: "request-0001" });
   assert.equal(Object.isFrozen(plan), true);
   const serialized = JSON.stringify(plan).toLowerCase();
   for (const forbidden of ["password", "session", "token", "secret", "rawcommand", "shell", "docker args", "curl"]) assert.equal(serialized.includes(forbidden), false);

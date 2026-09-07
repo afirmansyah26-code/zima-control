@@ -16,6 +16,7 @@ import type {
   DurableMutationOperation,
   DurableMutationRepository,
   DurableTransitionInput,
+  MutationDispatchAuthorizationInput,
   MutationAuditEventType,
   MutationLease,
   RecoveryState,
@@ -89,6 +90,45 @@ export class PrismaDurableMutationRepository implements DurableMutationRepositor
       const row = await this.prisma.mutationOperation.findUnique({ where: { id: operationId }, include: { idempotencyClaim: true } });
       return row ? mapOperation(row) : null;
     } catch { throw persistenceFailure(); }
+  }
+
+  public async authorizeDispatch(input: MutationDispatchAuthorizationInput): Promise<DurableMutationOperation> {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const owned = await tx.mutationLock.updateMany({
+          where: {
+            operationKey: input.operationKey,
+            ownerOperationId: input.operationId,
+            fencingToken: input.fencingToken,
+            leaseExpiresAt: { gt: input.now },
+          },
+          data: { updatedAt: input.now },
+        });
+        if (owned.count !== 1) throw staleOwnership();
+        const operation = await tx.mutationOperation.findFirst({
+          where: {
+            id: input.operationId,
+            status: "EXECUTING",
+            fencingToken: input.fencingToken,
+            operationKey: input.operationKey,
+            action: input.action,
+            applicationId: input.applicationId,
+            serviceId: input.serviceId,
+            containerId: input.containerId,
+            executionDomain: input.executionDomain,
+          },
+          include: { idempotencyClaim: true },
+        });
+        if (!operation) throw staleOwnership();
+        const priorDispatch = await tx.mutationAuditEvent.findFirst({ where: { operationId: input.operationId, eventType: "DISPATCH_AUTHORIZED" }, select: { id: true } });
+        if (priorDispatch) throw staleOwnership();
+        await appendAuditAtSequence(tx, operation.id, operation.auditSequence, "DISPATCH_AUTHORIZED", "EXECUTING", null, input.now);
+        return mapOperation(operation);
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    } catch (error) {
+      if (error instanceof MutationError) throw error;
+      throw persistenceFailure();
+    }
   }
 
   public async transitionWithAudit(input: DurableTransitionInput): Promise<DurableMutationOperation> {
@@ -268,6 +308,16 @@ export class PrismaDurableMutationRepository implements DurableMutationRepositor
 async function appendAudit(tx: Transaction, operationId: string, eventType: MutationAuditEventType, status: ActionStatus, reasonCode: MutationErrorCode | null, timestamp: Date): Promise<void> {
   const operation = await tx.mutationOperation.update({ where: { id: operationId }, data: { auditSequence: { increment: 1 } } });
   await tx.mutationAuditEvent.create({ data: { operationId, sequence: operation.auditSequence, actorId: operation.actorId, actorRole: operation.actorRole, action: operation.action, applicationId: operation.applicationId, serviceId: operation.serviceId, containerId: operation.containerId, status, eventType, reasonCode, timestamp } });
+}
+
+async function appendAuditAtSequence(tx: Transaction, operationId: string, expectedSequence: number, eventType: MutationAuditEventType, status: ActionStatus, reasonCode: MutationErrorCode | null, timestamp: Date): Promise<void> {
+  const advanced = await tx.mutationOperation.updateMany({
+    where: { id: operationId, auditSequence: expectedSequence },
+    data: { auditSequence: { increment: 1 } },
+  });
+  if (advanced.count !== 1) throw staleOwnership();
+  const operation = await tx.mutationOperation.findUniqueOrThrow({ where: { id: operationId } });
+  await tx.mutationAuditEvent.create({ data: { operationId, sequence: expectedSequence + 1, actorId: operation.actorId, actorRole: operation.actorRole, action: operation.action, applicationId: operation.applicationId, serviceId: operation.serviceId, containerId: operation.containerId, status, eventType, reasonCode, timestamp } });
 }
 
 function mapOperation(row: { id: string; actorId: string; actorRole: string; action: string; applicationId: string; serviceId: string | null; containerId: string | null; executionDomain: string; operationKey: string; fingerprint: string; status: string; verificationState: string; recoveryState: string; fencingToken: number | null; reasonCode: string | null; deadlineAt: Date; startedAt: Date | null; completedAt: Date | null; createdAt: Date; updatedAt: Date; idempotencyClaim: { idempotencyKey: string } | null }): DurableMutationOperation {

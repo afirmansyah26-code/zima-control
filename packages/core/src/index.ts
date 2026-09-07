@@ -69,6 +69,7 @@ export type {
   DurableMutationRepository,
   DurableMutationServiceOptions,
   DurableTransitionInput,
+  MutationDispatchAuthorizationInput,
   MutationAuditEventType,
   MutationFailurePoint,
   MutationLease,

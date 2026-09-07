@@ -63,7 +63,7 @@ export interface ActionResult {
 export interface ActionExecutionResult {
   accepted: boolean;
   outcome: ActionExecutionOutcome;
-  errorCode?: "EXECUTION_REJECTED";
+  errorCode?: MutationErrorCode;
 }
 
 export type ActionExecutionOutcome =
@@ -74,7 +74,8 @@ export type ActionExecutionOutcome =
 
 export interface VerificationResult {
   verified: boolean;
-  errorCode?: "VERIFICATION_FAILED";
+  outcome?: "VERIFIED" | "MISMATCH" | "UNKNOWN";
+  errorCode?: MutationErrorCode;
 }
 
 export type MutationErrorCode =
@@ -100,6 +101,14 @@ export type MutationErrorCode =
   | "AUDIT_PERSISTENCE_FAILED"
   | "OPERATION_TIMED_OUT"
   | "STALE_OPERATION_OWNERSHIP"
+  | "CONTAINER_NOT_FOUND"
+  | "IDENTITY_MISMATCH"
+  | "DOCKER_UNAVAILABLE"
+  | "DOCKER_PERMISSION_DENIED"
+  | "ACTION_REJECTED_BY_DOCKER"
+  | "DOCKER_TIMEOUT"
+  | "POST_ACTION_VERIFICATION_FAILED"
+  | "MUTATION_UNCERTAIN"
   | "NOT_IMPLEMENTED";
 
 export class MutationError extends Error {
@@ -143,7 +152,7 @@ export interface MutationPolicy {
   evaluate(application: RegistryApplicationSnapshotReadRecord["application"]): MutationPolicyDecision;
 }
 
-/** Conservative current policy: only a controlled ZimaOS application has a known future path. */
+/** Conservative current policy: only a controlled ZimaOS-owned Docker application has the reviewed Docker path. */
 export class DefaultMutationPolicy implements MutationPolicy {
   public evaluate(application: RegistryApplicationSnapshotReadRecord["application"]): MutationPolicyDecision {
     if (application.runtime?.toUpperCase() !== "DOCKER") {
@@ -152,7 +161,7 @@ export class DefaultMutationPolicy implements MutationPolicy {
     if (application.isUncontrolled !== false || application.managedBy !== "ZIMAOS" || !application.zimaosAppId) {
       return { allowed: false, executionDomain: "UNSUPPORTED", errorCode: "UNSUPPORTED_MANAGEMENT" };
     }
-    return { allowed: true, executionDomain: "ZIMAOS" };
+    return { allowed: true, executionDomain: "DOCKER" };
   }
 }
 

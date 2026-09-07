@@ -7,6 +7,7 @@ import type {
   DurableMutationOperation,
   DurableMutationRepository,
   DurableTransitionInput,
+  MutationDispatchAuthorizationInput,
   MutationLease,
 } from "./durable-mutation.js";
 
@@ -47,6 +48,28 @@ export class InMemoryDurableMutationRepository implements DurableMutationReposit
 
   public async findOperation(operationId: string): Promise<DurableMutationOperation | null> {
     const row = this.operations.get(operationId); return row ? cloneOperation(row) : null;
+  }
+
+  public async authorizeDispatch(input: MutationDispatchAuthorizationInput): Promise<DurableMutationOperation> {
+    const operation = this.requireOperation(input.operationId);
+    const lease = this.locks.get(input.operationKey);
+    if (
+      operation.status !== "EXECUTING"
+      || operation.fencingToken !== input.fencingToken
+      || operation.operationKey !== input.operationKey
+      || operation.action !== input.action
+      || operation.applicationId !== input.applicationId
+      || operation.serviceId !== input.serviceId
+      || operation.containerId !== input.containerId
+      || operation.executionDomain !== input.executionDomain
+      || !lease
+      || lease.ownerOperationId !== input.operationId
+      || lease.fencingToken !== input.fencingToken
+      || lease.leaseExpiresAt <= input.now
+    ) throw staleOwnership();
+    if ((this.audits.get(operation.id) ?? []).some((event) => event.eventType === "DISPATCH_AUTHORIZED")) throw staleOwnership();
+    await this.append(operation, "DISPATCH_AUTHORIZED", input.now, null);
+    return cloneOperation(operation);
   }
 
   public async transitionWithAudit(input: DurableTransitionInput): Promise<DurableMutationOperation> {

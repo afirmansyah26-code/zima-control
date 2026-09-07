@@ -7,6 +7,7 @@ COPY apps/worker/package.json apps/worker/package.json
 COPY apps/web/package.json apps/web/package.json
 COPY packages/application-registry-contracts/package.json packages/application-registry-contracts/package.json
 COPY packages/core/package.json packages/core/package.json
+COPY packages/docker-adapter/package.json packages/docker-adapter/package.json
 COPY packages/zimaos-adapter/package.json packages/zimaos-adapter/package.json
 COPY prisma/schema.prisma prisma/schema.prisma
 RUN npm ci

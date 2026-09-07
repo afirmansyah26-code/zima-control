@@ -146,6 +146,22 @@ test("old fencing epoch cannot commit or release a newer same-operation lease", 
   assert.equal((await repository.findOperation(plan.operationId))?.fencingToken, second.fencingToken);
 });
 
+test("dispatch authorization is one-time, target-bound, audited, and fenced", async () => {
+  const repository = new InMemoryDurableMutationRepository();
+  const plan = {
+    operationId: "dispatch-operation", actor: { id: actor.id, role: actor.role }, action: "START" as const,
+    target: { applicationId: "app-a", containerId: "container-a" }, executionDomain: "DOCKER" as const,
+    operationKey: "application:app-a", idempotencyKey: "dispatch-once",
+  };
+  await repository.claim({ plan, fingerprint: mutationFingerprint(plan), now: new Date(0), idempotencyExpiresAt: new Date(10_000), deadlineAt: new Date(1_000) });
+  const lease = await repository.acquireLease(plan.operationKey, plan.operationId, new Date(0), new Date(100));
+  assert.ok(lease);
+  await repository.transitionWithAudit({ operationId: plan.operationId, expected: ["VALIDATED"], status: "EXECUTING", now: new Date(1), eventType: "STATE_CHANGED", ownership: lease });
+  await repository.authorizeDispatch({ operationId: plan.operationId, operationKey: plan.operationKey, fencingToken: lease.fencingToken, action: plan.action, applicationId: plan.target.applicationId, serviceId: null, containerId: "container-a", executionDomain: "DOCKER", now: new Date(2) });
+  await assert.rejects(repository.authorizeDispatch({ operationId: plan.operationId, operationKey: plan.operationKey, fencingToken: lease.fencingToken, action: plan.action, applicationId: plan.target.applicationId, serviceId: null, containerId: "container-a", executionDomain: "DOCKER", now: new Date(3) }), (error) => error instanceof MutationError && error.code === "STALE_OPERATION_OWNERSHIP");
+  assert.equal((await repository.listAuditEvents(plan.operationId)).filter((event) => event.eventType === "DISPATCH_AUTHORIZED").length, 1);
+});
+
 test("deadline reached before invocation does not start the executor and safely times out", async () => {
   const repository = new InMemoryDurableMutationRepository();
   let clockCalls = 0;
