@@ -102,6 +102,46 @@ export interface AuthLogoutResponse {
   loggedOut: true;
 }
 
+export type ApplicationMutationAction = "START" | "STOP" | "RESTART";
+
+export type ApplicationMutationStatus =
+  | "PENDING"
+  | "AUTHORIZED"
+  | "VALIDATED"
+  | "EXECUTING"
+  | "VERIFYING"
+  | "SUCCEEDED"
+  | "REJECTED"
+  | "FAILED"
+  | "TIMED_OUT"
+  | "CANCELLED"
+  | "INDETERMINATE";
+
+export type ApplicationMutationOutcomeCode =
+  | "SUCCEEDED"
+  | "IN_PROGRESS"
+  | "REJECTED"
+  | "FAILED"
+  | "TIMED_OUT"
+  | "CANCELLED"
+  | "INDETERMINATE";
+
+export interface ApplicationMutationRequest {
+  action: ApplicationMutationAction;
+  idempotencyKey: string;
+}
+
+export interface ApplicationMutationOperationResponse {
+  operation: {
+    operationId: string;
+    applicationId: string;
+    action: ApplicationMutationAction;
+    status: ApplicationMutationStatus;
+    replayed: boolean;
+    outcomeCode: ApplicationMutationOutcomeCode;
+  };
+}
+
 export type ApiErrorCode =
   | "APPLICATION_NOT_FOUND"
   | "INVALID_REQUEST"
@@ -110,6 +150,13 @@ export type ApiErrorCode =
   | "AUTHENTICATION_THROTTLED"
   | "FORBIDDEN"
   | "CSRF_REQUIRED"
+  | "IDEMPOTENCY_CONFLICT"
+  | "TARGET_UNSUPPORTED"
+  | "TARGET_UNAVAILABLE"
+  | "OPERATION_CONFLICT"
+  | "MUTATION_FAILED"
+  | "MUTATION_TIMED_OUT"
+  | "MUTATION_INDETERMINATE"
   | "INTERNAL_ERROR";
 
 export interface ApiErrorResponse {

@@ -63,6 +63,7 @@ export class DockerActionExecutor implements ApplicationActionExecutor {
     } catch (error) {
       return rejected(gatewayCode(error));
     }
+    if (context.signal.aborted || this.clock() >= context.deadlineAt) return rejected("DOCKER_TIMEOUT");
     if (inspection.containerId !== initial.containerId) return rejected("IDENTITY_MISMATCH");
 
     const decision = actionDecision(plan.action, inspection.state);
@@ -73,6 +74,8 @@ export class DockerActionExecutor implements ApplicationActionExecutor {
     // is then recorded immediately before the external mutating request.
     const current = await this.resolveTarget(plan);
     if (current instanceof SafeExecutorFailure) return rejected(current.code);
+    const dispatchAuthorizationTime = this.clock();
+    if (context.signal.aborted || dispatchAuthorizationTime >= context.deadlineAt) return rejected("DOCKER_TIMEOUT");
     try {
       await this.operations.authorizeDispatch({
         operationId: context.operationId,
@@ -83,7 +86,7 @@ export class DockerActionExecutor implements ApplicationActionExecutor {
         serviceId: plan.target.serviceId ?? null,
         containerId: current.containerId,
         executionDomain: plan.executionDomain,
-        now: this.clock(),
+        now: dispatchAuthorizationTime,
       });
     } catch (error) {
       if (error instanceof MutationError) return rejected(error.code);

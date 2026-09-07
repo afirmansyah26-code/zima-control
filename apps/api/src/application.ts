@@ -30,6 +30,12 @@ import {
   type AuthenticationRouteOptions,
 } from "./auth/http.js";
 import { AuthServiceError } from "./auth/service.js";
+import { installApplicationMutationRoute } from "./mutation-http.js";
+import {
+  ApplicationMutationServiceError,
+  publicMutationErrorMessage,
+  type ApplicationMutationService,
+} from "./mutation-service.js";
 
 export type ApplicationRegistryReadService = Pick<
   ApplicationRegistryService,
@@ -45,6 +51,7 @@ export interface ApplicationRegistryApiOptions {
   readiness?: () => Promise<boolean>;
   auth?: AuthenticationBoundary;
   trustForwardedProto?: boolean;
+  mutation?: ApplicationMutationService;
 }
 
 /**
@@ -82,6 +89,12 @@ export function createApplicationRegistryApi(
       trustForwardedProto: options.trustForwardedProto,
     };
     installAuthenticationRoutes(app, options.auth, authOptions);
+  }
+
+  if (options.auth && options.mutation) {
+    installApplicationMutationRoute(app, options.auth, options.mutation, {
+      trustForwardedProto: options.trustForwardedProto,
+    });
   }
 
   const requireReadPermission = async (context: Context, next: () => Promise<void>) => {
@@ -147,6 +160,24 @@ export function createApplicationRegistryApi(
       return error.code === "AUTHENTICATION_REQUIRED"
         ? context.json(errorResponse("AUTHENTICATION_REQUIRED", "Authentication required"), 401)
         : context.json(errorResponse("FORBIDDEN", "Forbidden"), 403);
+    }
+    if (error instanceof ApplicationMutationServiceError) {
+      const response = errorResponse(error.code, publicMutationErrorMessage(error.code));
+      switch (error.code) {
+        case "AUTHENTICATION_REQUIRED": return context.json(response, 401);
+        case "FORBIDDEN": return context.json(response, 403);
+        case "INVALID_REQUEST": return context.json(response, 400);
+        case "IDEMPOTENCY_CONFLICT":
+        case "TARGET_UNAVAILABLE":
+        case "OPERATION_CONFLICT":
+        case "MUTATION_INDETERMINATE":
+          return context.json(response, 409);
+        case "TARGET_UNSUPPORTED":
+        case "MUTATION_FAILED":
+          return context.json(response, 422);
+        case "MUTATION_TIMED_OUT": return context.json(response, 504);
+        case "INTERNAL_ERROR": return context.json(response, 500);
+      }
     }
     if (error instanceof ApplicationRegistryServiceError) {
       switch (error.code) {

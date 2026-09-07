@@ -278,6 +278,8 @@ export interface DurableMutationRepository {
   listAuditEvents(operationId: string): Promise<DurableMutationAuditEvent[]>;
   claimParentWithStep(input: DurableParentChildClaimInput): Promise<DurableParentChildClaim>;
   replayParentClaim(input: DurableParentReplayInput): Promise<DurableParentChildOperation | null>;
+  /** Read-only claim lookup for transport result recovery; unlike replayParentClaim it appends no audit event. */
+  findParentClaim(input: DurableParentReplayInput): Promise<DurableParentChildOperation | null>;
   findOperationWithSteps(operationId: string): Promise<DurableParentChildOperation | null>;
   rejectParentChildBeforeOwnership(operationId: string, childStepId: string, now: Date, reasonCode: MutationErrorCode): Promise<DurableParentChildOperation>;
   authorizeStepDispatch(input: MutationStepDispatchAuthorizationInput): Promise<DurableMutationOperationStep>;

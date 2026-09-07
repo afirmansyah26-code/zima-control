@@ -1,4 +1,14 @@
 export { createApplicationRegistryApi } from "./application.js";
+export {
+  ApplicationMutationServiceError,
+  OrchestratedApplicationMutationService,
+  publicMutationErrorMessage,
+  toPublicMutationResponse,
+} from "./mutation-service.js";
+export type {
+  ApplicationMutationService,
+  PublicMutationErrorCode,
+} from "./mutation-service.js";
 export type {
   ApplicationRegistryApiOptions,
   ApplicationRegistryReadService,
@@ -71,6 +81,11 @@ export type {
 export type {
   ApiErrorCode,
   ApiErrorResponse,
+  ApplicationMutationAction,
+  ApplicationMutationOperationResponse,
+  ApplicationMutationOutcomeCode,
+  ApplicationMutationRequest,
+  ApplicationMutationStatus,
   ApplicationDeploymentResponse,
   ApplicationDetailResponse,
   ApplicationEnvironmentMetadataResponse,

@@ -370,6 +370,11 @@ test("Prisma parent, child, idempotency claim, and initial audits commit atomica
   assert.deepEqual((await repository.listAuditEvents(input.plan.operationId)).map((event) => [event.sequence, event.eventType, event.childStepId]), [
     [1, "CLAIMED", null], [2, "STEP_CREATED", input.stepId],
   ]);
+  const inspected = await repository.findParentClaim({
+    actorId: input.plan.actor.id, idempotencyKey: input.plan.idempotencyKey, fingerprint: input.fingerprint, now: new Date(1),
+  });
+  assert.equal(inspected?.operation.id, input.plan.operationId);
+  assert.equal((await repository.listAuditEvents(input.plan.operationId)).length, 2);
 
   const restarted = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
   try {

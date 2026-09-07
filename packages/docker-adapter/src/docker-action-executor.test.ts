@@ -237,9 +237,11 @@ test("application execution timeout after dispatch becomes INDETERMINATE and pre
 
 test("application executor that ignores abort before dispatch remains blocking until recovery", async () => {
   const gateway = new FakeGateway();
+  let finishInspect!: () => void;
+  const inspectGate = new Promise<void>((resolve) => { finishInspect = resolve; });
   gateway.inspect = async (id: string, _signal: AbortSignal) => {
     gateway.calls.push(`inspect:${id}`);
-    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    await inspectGate;
     return { containerId: id, state: "exited" };
   };
   const repository = new InMemoryDurableMutationRepository();
@@ -249,9 +251,12 @@ test("application executor that ignores abort before dispatch remains blocking u
   assert.equal(value?.operation.status, "INDETERMINATE");
   assert.equal(value?.steps[0]?.status, "INDETERMINATE");
   assert.equal(value?.steps[0]?.externalEffect, "NOT_STARTED");
+  assert.equal(value?.steps[0]?.dispatchAuthorizedAt, null);
+  assert.equal((await repository.listAuditEvents("application-operation-a")).filter((event) => event.eventType === "DISPATCH_AUTHORIZED").length, 0);
   const competitor = applicationOrchestrator(new FakeGateway(), registry(), repository, { operationId: "application-operation-b" });
   await assert.rejects(competitor.orchestrator.perform({ ...state.actor, id: "other-actor" }, applicationRequest("STOP", "ignored-abort-competitor")), (error) => error instanceof MutationError && error.code === "OPERATION_IN_PROGRESS");
-  await new Promise<void>((resolve) => setTimeout(resolve, 35));
+  finishInspect();
+  await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(gateway.calls.filter((call) => call.startsWith("start:")).length, 0);
 });
 

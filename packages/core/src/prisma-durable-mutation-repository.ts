@@ -270,6 +270,25 @@ export class PrismaDurableMutationRepository implements DurableMutationRepositor
     throw persistenceFailure();
   }
 
+  public async findParentClaim(input: DurableParentReplayInput): Promise<DurableParentChildOperation | null> {
+    try {
+      const existing = await this.prisma.mutationIdempotencyClaim.findFirst({
+        where: {
+          actorId: input.actorId,
+          idempotencyKey: input.idempotencyKey,
+          fingerprint: input.fingerprint,
+          expiresAt: { gt: input.now },
+        },
+        include: { operation: { include: { idempotencyClaim: true, steps: { orderBy: { sequence: "asc" } } } } },
+      });
+      if (!existing) return null;
+      if (existing.operation.steps.length !== 1) throw persistenceFailure();
+      return { operation: mapOperation(existing.operation), steps: existing.operation.steps.map(mapStep) };
+    } catch {
+      throw persistenceFailure();
+    }
+  }
+
   public async rejectParentChildBeforeOwnership(operationId: string, childStepId: string, now: Date, reasonCode: MutationErrorCode): Promise<DurableParentChildOperation> {
     try {
       const eligible = await this.prisma.mutationOperation.findFirst({ where: {

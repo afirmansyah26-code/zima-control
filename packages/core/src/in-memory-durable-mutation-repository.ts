@@ -112,6 +112,14 @@ export class InMemoryDurableMutationRepository implements DurableMutationReposit
     return this.cloneParentChild(value);
   }
 
+  public async findParentClaim(input: DurableParentReplayInput): Promise<DurableParentChildOperation | null> {
+    const existing = this.claims.get(claimKey(input.actorId, input.idempotencyKey));
+    if (!existing || existing.expiresAt <= input.now || existing.fingerprint !== input.fingerprint) return null;
+    const value = this.requireParentChild(existing.operationId);
+    if (value.steps.length !== 1) throw new MutationError("PERSISTENCE_FAILED", "Mutation persistence failed");
+    return this.cloneParentChild(value);
+  }
+
   public async rejectParentChildBeforeOwnership(operationId: string, childStepId: string, now: Date, reasonCode: MutationErrorCode): Promise<DurableParentChildOperation> {
     const operation = this.requireOperation(operationId); const step = this.requireStep(childStepId, operationId);
     if (operation.status !== "VALIDATED" || step.status !== "VALIDATED" || operation.fencingToken !== null || step.fencingToken !== null || this.locks.get(operation.operationKey)?.ownerOperationId === operationId) throw staleOwnership();

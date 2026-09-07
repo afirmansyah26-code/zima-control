@@ -85,6 +85,11 @@ test("parent idempotency freezes one child and a fenced lifecycle finalizes pare
   const repository = new InMemoryDurableMutationRepository();
   const input = claimInput();
   assert.equal((await repository.claimParentWithStep(input)).kind, "created");
+  const inspected = await repository.findParentClaim({
+    actorId: input.plan.actor.id, idempotencyKey: input.plan.idempotencyKey, fingerprint: input.fingerprint, now,
+  });
+  assert.equal(inspected?.steps[0]?.id, input.stepId);
+  assert.equal((await repository.listAuditEvents(input.plan.operationId)).length, 2);
   const replay = await repository.claimParentWithStep({ ...input, plan: { ...input.plan, operationId: "unused" }, stepId: "unused-step" });
   assert.equal(replay.kind, "replay");
   assert.equal(replay.value.steps[0]?.id, input.stepId);

@@ -17,7 +17,7 @@
     "start": "node dist/start.js",
     "auth:bootstrap": "node dist/bootstrap.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx --test src/application.test.ts src/runtime.test.ts src/auth.test.ts src/auth-prisma.test.ts"
+    "test": "tsx --test src/application.test.ts src/runtime.test.ts src/auth.test.ts src/auth-prisma.test.ts src/mutation.test.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
