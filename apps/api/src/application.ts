@@ -31,11 +31,16 @@ import {
 } from "./auth/http.js";
 import { AuthServiceError } from "./auth/service.js";
 import { installApplicationMutationRoute } from "./mutation-http.js";
+import { installApplicationMutationStatusRoute } from "./mutation-status-http.js";
 import {
   ApplicationMutationServiceError,
   publicMutationErrorMessage,
   type ApplicationMutationService,
 } from "./mutation-service.js";
+import {
+  ApplicationMutationStatusReadServiceError,
+  type ApplicationMutationStatusReadService,
+} from "./mutation-status-service.js";
 
 export type ApplicationRegistryReadService = Pick<
   ApplicationRegistryService,
@@ -52,6 +57,7 @@ export interface ApplicationRegistryApiOptions {
   auth?: AuthenticationBoundary;
   trustForwardedProto?: boolean;
   mutation?: ApplicationMutationService;
+  mutationStatus?: ApplicationMutationStatusReadService;
 }
 
 /**
@@ -95,6 +101,10 @@ export function createApplicationRegistryApi(
     installApplicationMutationRoute(app, options.auth, options.mutation, {
       trustForwardedProto: options.trustForwardedProto,
     });
+  }
+
+  if (options.auth && options.mutationStatus) {
+    installApplicationMutationStatusRoute(app, options.auth, options.mutationStatus);
   }
 
   const requireReadPermission = async (context: Context, next: () => Promise<void>) => {
@@ -177,6 +187,14 @@ export function createApplicationRegistryApi(
           return context.json(response, 422);
         case "MUTATION_TIMED_OUT": return context.json(response, 504);
         case "INTERNAL_ERROR": return context.json(response, 500);
+      }
+    }
+    if (error instanceof ApplicationMutationStatusReadServiceError) {
+      switch (error.code) {
+        case "OPERATION_NOT_FOUND":
+          return context.json(errorResponse("OPERATION_NOT_FOUND", "Mutation operation not found"), 404);
+        case "INTERNAL_ERROR":
+          return context.json(errorResponse("INTERNAL_ERROR", "Internal server error"), 500);
       }
     }
     if (error instanceof ApplicationRegistryServiceError) {

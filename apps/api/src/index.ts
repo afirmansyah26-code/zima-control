@@ -9,6 +9,17 @@ export type {
   ApplicationMutationService,
   PublicMutationErrorCode,
 } from "./mutation-service.js";
+export { mutationOutcomeCodeForStatus } from "./mutation-operation-response.js";
+export { installApplicationMutationStatusRoute } from "./mutation-status-http.js";
+export {
+  ApplicationMutationStatusReadServiceError,
+  DurableApplicationMutationStatusReadService,
+  toPublicMutationStatusResponse,
+} from "./mutation-status-service.js";
+export type {
+  ApplicationMutationStatusReadService,
+  ApplicationMutationStatusReadServiceErrorCode,
+} from "./mutation-status-service.js";
 export type {
   ApplicationRegistryApiOptions,
   ApplicationRegistryReadService,
@@ -83,6 +94,7 @@ export type {
   ApiErrorResponse,
   ApplicationMutationAction,
   ApplicationMutationOperationResponse,
+  ApplicationMutationOperationStatusResponse,
   ApplicationMutationOutcomeCode,
   ApplicationMutationRequest,
   ApplicationMutationStatus,

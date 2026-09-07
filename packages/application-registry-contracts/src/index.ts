@@ -142,6 +142,16 @@ export interface ApplicationMutationOperationResponse {
   };
 }
 
+export interface ApplicationMutationOperationStatusResponse {
+  operation: {
+    operationId: string;
+    applicationId: string;
+    action: ApplicationMutationAction;
+    status: ApplicationMutationStatus;
+    outcomeCode: ApplicationMutationOutcomeCode;
+  };
+}
+
 export type ApiErrorCode =
   | "APPLICATION_NOT_FOUND"
   | "INVALID_REQUEST"
@@ -150,6 +160,7 @@ export type ApiErrorCode =
   | "AUTHENTICATION_THROTTLED"
   | "FORBIDDEN"
   | "CSRF_REQUIRED"
+  | "OPERATION_NOT_FOUND"
   | "IDEMPOTENCY_CONFLICT"
   | "TARGET_UNSUPPORTED"
   | "TARGET_UNAVAILABLE"

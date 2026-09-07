@@ -8,6 +8,7 @@ export type {
   AuthUserResponse,
   ApplicationMutationAction,
   ApplicationMutationOperationResponse,
+  ApplicationMutationOperationStatusResponse,
   ApplicationMutationOutcomeCode,
   ApplicationMutationRequest,
   ApplicationMutationStatus,

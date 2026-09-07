@@ -1,6 +1,5 @@
 import {
   MutationError,
-  type ActionStatus,
   type Actor,
   type ApplicationMutationOrchestrator,
   type ApplicationMutationOutcome,
@@ -14,6 +13,7 @@ import type {
   ApplicationMutationOperationResponse,
   ApplicationMutationRequest,
 } from "./api-types.js";
+import { mutationOutcomeCodeForStatus } from "./mutation-operation-response.js";
 
 export type PublicMutationErrorCode = Extract<
   ApiErrorCode,
@@ -121,26 +121,9 @@ export function toPublicMutationResponse(
       action: result.action,
       status: result.status,
       replayed: outcome.replayed,
-      outcomeCode: outcomeCodeForStatus(result.status),
+      outcomeCode: mutationOutcomeCodeForStatus(result.status),
     },
   };
-}
-
-function outcomeCodeForStatus(status: ActionStatus): ApplicationMutationOperationResponse["operation"]["outcomeCode"] {
-  switch (status) {
-    case "PENDING":
-    case "AUTHORIZED":
-    case "VALIDATED":
-    case "EXECUTING":
-    case "VERIFYING":
-      return "IN_PROGRESS";
-    case "SUCCEEDED": return "SUCCEEDED";
-    case "REJECTED": return "REJECTED";
-    case "FAILED": return "FAILED";
-    case "TIMED_OUT": return "TIMED_OUT";
-    case "CANCELLED": return "CANCELLED";
-    case "INDETERMINATE": return "INDETERMINATE";
-  }
 }
 
 function publicCodeForMutationError(code: MutationErrorCode): PublicMutationErrorCode {
