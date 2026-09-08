@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
+import type { PrismaClient } from "@prisma/client";
 import { InMemoryRegistryRepository } from "@zima-control-center/core";
 import {
   ApiRuntimeConfigError,
+  composeApiRuntimeWithPrisma,
   composeApplicationRegistryApi,
   evaluateProductionCapabilityReadiness,
   probeProductionCapabilityReadiness,
@@ -228,7 +230,7 @@ test("mutation readiness requires every explicit healthy probe and fails closed"
   assert.equal(await probeProductionCapabilityReadiness("DOCKER_SINGLE_CONTAINER", invalid), "NOT_READY");
 });
 
-test("2C-3 production composition keeps mutation and status routes dormant", async () => {
+test("generic composition keeps mutation and status routes dormant without explicit dependencies", async () => {
   const auth: AuthenticationBoundary = {
     sessionCookieName: "test-session",
     csrfCookieName: "test-csrf",
@@ -250,6 +252,122 @@ test("2C-3 production composition keeps mutation and status routes dormant", asy
     assert.deepEqual(await response.json(), { error: { code: "INVALID_REQUEST", message: "Route not found" } });
   }
   assert.equal((await app.request("/health")).status, 200);
+});
+
+test("STATUS_ONLY production composition uses one shared Prisma client and installs only GET status", async () => {
+  const state = fakeProductionPrisma();
+  const config = readApiRuntimeConfig({
+    NODE_ENV: "production",
+    DATABASE_URL: "file:/data/registry.db",
+    MUTATION_CAPABILITY_MODE: "STATUS_ONLY",
+  });
+  const runtime = composeApiRuntimeWithPrisma(
+    config,
+    state.prisma as unknown as PrismaClient,
+  );
+
+  const ready = await runtime.app.request("/ready");
+  assert.equal(ready.status, 200);
+  assert.deepEqual(await ready.json(), { status: "ready", service: "api" });
+  assert.deepEqual(state.counts, { application: 1, user: 1, mutation: 1 });
+
+  const status = await runtime.app.request("/api/mutations/operation-a", {
+    headers: { Cookie: `zima_cc_session=${"a".repeat(32)}` },
+  });
+  assert.equal(status.status, 200);
+  assert.equal(status.headers.get("Cache-Control"), "no-store");
+  assert.deepEqual(await status.json(), {
+    operation: {
+      operationId: "operation-a",
+      applicationId: "application-a",
+      action: "START",
+      status: "SUCCEEDED",
+      outcomeCode: "SUCCEEDED",
+    },
+  });
+  assert.equal(state.operationReads, 1);
+
+  const post = await runtime.app.request("/api/applications/application-a/mutation", {
+    method: "POST",
+    headers: { Cookie: `zima_cc_session=${"a".repeat(32)}` },
+  });
+  assert.equal(post.status, 404);
+  assert.deepEqual(await post.json(), {
+    error: { code: "INVALID_REQUEST", message: "Route not found" },
+  });
+  assert.equal(state.operationWrites, 0);
+
+  await runtime.disconnect();
+  assert.equal(state.disconnects, 1);
+});
+
+test("production capability modes remain fail-closed around status-only wiring", async () => {
+  for (const scenario of [
+    { mode: "DISABLED", ready: 200, status: 404, mutationProbe: 0 },
+    { mode: "DOCKER_SINGLE_CONTAINER", ready: 503, status: 404, mutationProbe: 0 },
+  ] as const) {
+    const state = fakeProductionPrisma();
+    const runtime = composeApiRuntimeWithPrisma({
+      host: "0.0.0.0",
+      port: 3000,
+      databaseUrl: "file:/data/registry.db",
+      authCookieSecure: true,
+      trustForwardedProto: false,
+      mutationCapabilityMode: scenario.mode,
+    }, state.prisma as unknown as PrismaClient);
+    assert.equal((await runtime.app.request("/ready")).status, scenario.ready);
+    assert.equal(
+      (await runtime.app.request("/api/mutations/operation-a")).status,
+      scenario.status,
+    );
+    assert.equal(state.counts.mutation, scenario.mutationProbe);
+    await runtime.disconnect();
+  }
+
+  const invalidPolicy = fakeProductionPrisma();
+  const invalidRuntime = composeApiRuntimeWithPrisma({
+    host: "0.0.0.0",
+    port: 3000,
+    databaseUrl: "file:local.db",
+    authCookieSecure: false,
+    trustForwardedProto: false,
+    mutationCapabilityMode: "STATUS_ONLY",
+  }, invalidPolicy.prisma as unknown as PrismaClient);
+  assert.equal((await invalidRuntime.app.request("/ready")).status, 503);
+  assert.deepEqual(invalidPolicy.counts, { application: 0, user: 0, mutation: 0 });
+  await invalidRuntime.disconnect();
+
+  const unavailableSchema = fakeProductionPrisma({ mutationCountFailure: true });
+  const unavailableRuntime = composeApiRuntimeWithPrisma({
+    host: "0.0.0.0",
+    port: 3000,
+    databaseUrl: "file:/data/registry.db",
+    authCookieSecure: true,
+    trustForwardedProto: false,
+    mutationCapabilityMode: "STATUS_ONLY",
+  }, unavailableSchema.prisma as unknown as PrismaClient);
+  const unavailable = await unavailableRuntime.app.request("/ready");
+  assert.equal(unavailable.status, 503);
+  assert.doesNotMatch(await unavailable.text(), /Prisma|SQLite|DATABASE_URL|\/data/i);
+  await unavailableRuntime.disconnect();
+});
+
+test("production runtime has no mutation execution composition", async () => {
+  const source = await readFile(new URL("./runtime.ts", import.meta.url), "utf8");
+  const compose = await readFile(new URL("../../../compose.yaml", import.meta.url), "utf8");
+  assert.doesNotMatch(
+    source,
+    /DockerActionExecutor|NodeDockerContainerGateway|ApplicationMutationOrchestrator|OrchestratedApplicationMutationService|docker-adapter/,
+  );
+  assert.equal(source.match(/new PrismaClient\(/g)?.length, 1);
+  assert.match(source, /composeApiRuntimeWithPrisma\(config, prisma\)/);
+  assert.match(source, /new PrismaDurableMutationRepository\(prisma\)/);
+  assert.match(source, /new DurableApplicationMutationStatusReadService/);
+  assert.match(
+    compose,
+    /MUTATION_CAPABILITY_MODE: \$\{MUTATION_CAPABILITY_MODE:-DISABLED\}/,
+  );
+  assert.doesNotMatch(compose, /docker\.sock/);
 });
 
 test("composed API exposes safe health and readiness without a listener", async () => {
@@ -312,5 +430,84 @@ function healthyMutationProbes(): ProductionCapabilityReadinessProbes {
     startupRecoveryComplete: () => true,
     executorVerifier: () => true,
     admissionControl: () => true,
+  };
+}
+
+function fakeProductionPrisma(options: { mutationCountFailure?: boolean } = {}) {
+  const counts = { application: 0, user: 0, mutation: 0 };
+  let operationReads = 0;
+  let operationWrites = 0;
+  let disconnects = 0;
+  const now = new Date();
+  const prisma = {
+    application: {
+      async count() { counts.application += 1; return 1; },
+    },
+    user: {
+      async count() { counts.user += 1; return 1; },
+    },
+    session: {
+      async findUnique() {
+        return {
+          id: "session-a",
+          userId: "operator-a",
+          tokenHash: "stored-hash",
+          expiresAt: new Date(now.getTime() + 60_000),
+          createdAt: now,
+          lastSeenAt: now,
+          user: {
+            id: "operator-a",
+            username: "operator-a",
+            passwordHash: "stored-password-hash",
+            role: "OPERATOR",
+            active: true,
+          },
+        };
+      },
+      async update() { return {}; },
+    },
+    mutationOperation: {
+      async count() {
+        counts.mutation += 1;
+        if (options.mutationCountFailure) throw new Error("Prisma SQLite private path");
+        return 1;
+      },
+      async findUnique() {
+        operationReads += 1;
+        return {
+          id: "operation-a",
+          actorId: "operator-a",
+          actorRole: "OPERATOR",
+          action: "START",
+          applicationId: "application-a",
+          serviceId: null,
+          containerId: null,
+          executionDomain: "DOCKER",
+          operationKey: "application:application-a",
+          fingerprint: "private-fingerprint",
+          status: "SUCCEEDED",
+          verificationState: "VERIFIED",
+          recoveryState: "NONE",
+          externalEffect: "COMPLETED",
+          fencingToken: 1,
+          reasonCode: null,
+          deadlineAt: new Date(now.getTime() + 60_000),
+          startedAt: now,
+          completedAt: now,
+          createdAt: now,
+          updatedAt: now,
+          idempotencyClaim: { idempotencyKey: "private-key" },
+        };
+      },
+      async update() { operationWrites += 1; return {}; },
+    },
+    async $disconnect() { disconnects += 1; },
+  };
+  return {
+    prisma,
+    counts,
+    get operationReads() { return operationReads; },
+    get operationWrites() { return operationWrites; },
+    get disconnects() { return disconnects; },
   };
 }

@@ -8,6 +8,7 @@ services:
       HOST: ${API_HOST:-0.0.0.0}
       PORT: ${API_PORT:-3000}
       NODE_ENV: production
+      MUTATION_CAPABILITY_MODE: ${MUTATION_CAPABILITY_MODE:-DISABLED}
       TRUST_FORWARDED_PROTO: "true"
     volumes:
       - registry-data:/data

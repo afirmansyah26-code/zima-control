@@ -1,6 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import {
   ApplicationRegistryService,
+  PrismaDurableMutationRepository,
   PrismaRegistryRepository,
   validateProductionSqliteDatabaseUrl,
   type RegistryReadRepository,
@@ -12,6 +13,8 @@ import {
 } from "./auth/service.js";
 import { PrismaAuthRepository } from "./auth/prisma-auth-repository.js";
 import type { AuthenticationBoundary } from "./auth/http.js";
+import { DurableApplicationMutationStatusReadService } from "./mutation-status-service.js";
+import type { ApplicationMutationStatusReadService } from "./mutation-status-service.js";
 
 export interface EnvironmentSource {
   readonly [name: string]: string | undefined;
@@ -196,10 +199,11 @@ export function composeApplicationRegistryApi(
   readiness: () => Promise<boolean> = async () => true,
   auth?: AuthenticationBoundary,
   trustForwardedProto = false,
+  mutationStatus?: ApplicationMutationStatusReadService,
 ): Hono {
   return createApplicationRegistryApi(
     new ApplicationRegistryService(repository),
-    { readiness, auth, trustForwardedProto },
+    { readiness, auth, trustForwardedProto, mutationStatus },
   );
 }
 
@@ -207,26 +211,59 @@ export function createApiRuntime(config: ApiRuntimeConfig): ApiRuntime {
   const prisma = new PrismaClient({
     datasources: { db: { url: config.databaseUrl } },
   });
+  return composeApiRuntimeWithPrisma(config, prisma);
+}
+
+/**
+ * Composes all persistence adapters from one already-created Prisma client.
+ * This seam keeps production ownership explicit and permits side-effect-free
+ * composition tests without creating another database connection.
+ */
+export function composeApiRuntimeWithPrisma(
+  config: ApiRuntimeConfig,
+  prisma: PrismaClient,
+): ApiRuntime {
   const repository = new PrismaRegistryRepository(prisma);
   const authentication = new AuthenticationService(
     new PrismaAuthRepository(prisma),
     { secureCookies: config.authCookieSecure },
   );
+  const mutationStatus = config.mutationCapabilityMode === "STATUS_ONLY"
+    ? new DurableApplicationMutationStatusReadService(
+      new PrismaDurableMutationRepository(prisma),
+    )
+    : undefined;
   const app = composeApplicationRegistryApi(repository, async () => {
     try {
+      // Validate the server-owned persistence boundary before any status-mode
+      // database probe. Normal production construction already validates this
+      // in readApiRuntimeConfig; retaining it here keeps this seam fail-closed.
+      if (config.mutationCapabilityMode === "STATUS_ONLY") {
+        validateProductionSqliteDatabaseUrl(config.databaseUrl);
+      }
       // A connectivity-only probe would report an empty, unprovisioned SQLite
       // file as ready. Check both registry and auth tables without mutating them.
       await prisma.application.count();
       await prisma.user.count();
-      // Milestone 2C-3 models higher capability modes but intentionally wires
-      // none of their dependencies or routes into production yet.
-      return evaluateProductionCapabilityReadiness(
+      const readiness = await probeProductionCapabilityReadiness(
         config.mutationCapabilityMode,
-      ) !== "NOT_READY";
+        {
+          mutationStatus: async () => {
+            if (!mutationStatus) return false;
+            await prisma.mutationOperation.count();
+            return true;
+          },
+          persistentDatabasePolicy: () => {
+            validateProductionSqliteDatabaseUrl(config.databaseUrl);
+            return true;
+          },
+        },
+      );
+      return readiness !== "NOT_READY";
     } catch {
       return false;
     }
-  }, authentication, config.trustForwardedProto);
+  }, authentication, config.trustForwardedProto, mutationStatus);
 
   return {
     app,
