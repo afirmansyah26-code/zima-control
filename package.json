@@ -12,7 +12,8 @@
     "pretypecheck": "npm run build:packages",
     "typecheck": "npm run typecheck --workspaces",
     "pretest": "npm run build",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "db:provision": "node apps/api/dist/provision.js"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
