@@ -28,12 +28,20 @@ export {
   ApiRuntimeConfigError,
   composeApplicationRegistryApi,
   createApiRuntime,
+  evaluateProductionCapabilityReadiness,
+  probeProductionCapabilityReadiness,
+  productionCapabilityModes,
   readApiRuntimeConfig,
 } from "./runtime.js";
 export type {
   ApiRuntime,
   ApiRuntimeConfig,
   EnvironmentSource,
+  ProductionCapabilityMode,
+  ProductionCapabilityProbe,
+  ProductionCapabilityReadinessInputs,
+  ProductionCapabilityReadinessProbes,
+  ProductionReadinessState,
 } from "./runtime.js";
 export {
   runApiProcess,
