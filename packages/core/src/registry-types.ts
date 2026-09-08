@@ -35,6 +35,33 @@ export interface RuntimeContainerInput {
   status?: string | null;
 }
 
+export type AuthoritativeRuntimeObservationSource = "docker" | "zimaos" | "combined";
+
+/**
+ * Immutable execution-authority evidence for one exact runtime target.
+ *
+ * This is distinct from discovery-time RuntimeAuthority and can represent only
+ * an authoritative observation. `observedAt` is the time at which the observer
+ * successfully obtained the source response; it does not mean the source
+ * guaranteed that the runtime state was current at that time. Freshness policy
+ * and target fingerprinting remain concerns of the mutation target resolver.
+ * This contract does not provide or discover observations.
+ */
+export interface AuthoritativeRuntimeObservation {
+  readonly applicationId: string;
+  readonly deploymentId: string;
+  readonly serviceId: string;
+  readonly containerId: string;
+  readonly managedBy: string;
+  readonly isUncontrolled: boolean;
+  readonly zimaosAppId: string | null;
+  readonly observedAt: Date;
+  readonly source: AuthoritativeRuntimeObservationSource;
+  readonly sourceAuthority: "authoritative";
+  /** Must satisfy the evidence identifier grammar enforced by the existing resolver. */
+  readonly evidenceId: string;
+}
+
 export type ComposeAuthority = "authoritative" | "non-authoritative";
 
 export type ComposeNonAuthorityReason =

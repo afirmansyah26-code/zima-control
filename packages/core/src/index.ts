@@ -176,6 +176,8 @@ export {
 export type { SecretClassification } from "./secret-policy.js";
 export type {
 	ApplicationStatus,
+	AuthoritativeRuntimeObservation,
+	AuthoritativeRuntimeObservationSource,
 	ComposeAuthority,
 	ComposeDiscoveryInput,
 	ComposeNormalizationResult,
