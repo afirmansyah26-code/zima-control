@@ -5,6 +5,10 @@ import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { PrismaClient } from "@prisma/client";
+import {
+  AuthorityStateService,
+  PrismaAuthorityRepository,
+} from "@zima-control-center/core";
 import { evaluateProductionCapabilityReadiness } from "./runtime.js";
 import {
   provisionProductionDatabase,
@@ -35,6 +39,12 @@ test("Prisma provisioning creates the frozen schema and reruns as a no-op", asyn
       "Application",
       "ApplicationDeployment",
       "ApplicationService",
+      "Authority",
+      "AuthorityApplication",
+      "AuthorityAuditEvent",
+      "AuthorityDeployment",
+      "AuthorityIntent",
+      "AuthorityService",
       "DeploymentNetwork",
       "DeploymentPort",
       "DeploymentVolume",
@@ -48,7 +58,7 @@ test("Prisma provisioning creates the frozen schema and reruns as a no-op", asyn
       "RuntimeContainer",
       "Session",
     ].sort());
-    assert.equal(await migrationCount(prisma), 1);
+    assert.equal(await migrationCount(prisma), 2);
 
     await prisma.$disconnect();
     prisma = undefined;
@@ -62,7 +72,7 @@ test("Prisma provisioning creates the frozen schema and reruns as a no-op", asyn
 
     prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
     assert.deepEqual(await sqliteTableNames(prisma), firstTables);
-    assert.equal(await migrationCount(prisma), 1);
+    assert.equal(await migrationCount(prisma), 2);
   } finally {
     await prisma?.$disconnect();
     assert.equal(dirname(databasePath), migrationsRoot);
@@ -132,6 +142,61 @@ test("migration failures are fatal, sanitized, and cannot satisfy mutation readi
       admissionControl: true,
     },
   ), "NOT_READY");
+});
+
+test("checked-in migrations support two-client authority idempotency and concurrency", async () => {
+  const migrationsRoot = resolve(projectRoot, "prisma");
+  const databaseName = `.authority-migration-test-${randomUUID()}.db`;
+  const databasePath = join(migrationsRoot, databaseName);
+  const databaseUrl = `file:./${databaseName}`;
+  let first: PrismaClient | undefined;
+  let second: PrismaClient | undefined;
+  try {
+    assert.equal(await runPrismaMigrateDeploy(databaseUrl, {
+      projectRoot,
+      environment: { ...process.env, RUST_LOG: "info" },
+    }), true);
+    first = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+    second = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+    const firstRepository = new PrismaAuthorityRepository(first);
+    const firstService = new AuthorityStateService(firstRepository);
+    const secondService = new AuthorityStateService(new PrismaAuthorityRepository(second));
+    const principal = (await firstService.initialize()).principal;
+    const applicationId = randomUUID();
+    await first.application.create({
+      data: {
+        id: applicationId,
+        name: `migration-authority-${applicationId}`,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    await firstService.associateApplication(principal, applicationId);
+    const deploymentRequest = {
+      applicationId,
+      idempotencyKey: "migration-backed-authority-request",
+      intentType: "DEPLOY" as const,
+      sourceReference: "catalog:migration-backed/v1",
+      sourceHash: "a".repeat(64),
+      services: [{ sourceServiceReference: "web", serviceName: "Web" }],
+    };
+    const settled = await Promise.allSettled([
+      firstService.issueDeployment(principal, deploymentRequest),
+      secondService.issueDeployment(principal, deploymentRequest),
+    ]);
+    const fulfilled = settled.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+    assert.deepEqual(fulfilled.map((result) => result.kind).sort(), ["created", "replay"]);
+    assert.equal(new Set(fulfilled.map((result) => result.value.intent.id)).size, 1);
+    assert.equal(new Set(fulfilled.map((result) => result.value.deployment.generationId)).size, 1);
+    assert.equal(await first.authorityIntent.count(), 1);
+    assert.equal(await first.authorityDeployment.count(), 1);
+  } finally {
+    await second?.$disconnect();
+    await first?.$disconnect();
+    assert.equal(dirname(databasePath), migrationsRoot);
+    assert.ok(databaseName.startsWith(".authority-migration-test-"));
+    await rm(databasePath, { force: true });
+  }
 });
 
 test("invalid configuration produces only a fixed sanitized process failure", async () => {

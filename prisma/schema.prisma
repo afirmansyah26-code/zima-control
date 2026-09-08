@@ -22,7 +22,8 @@ model Application {
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
-  deployment ApplicationDeployment?
+  deployment            ApplicationDeployment?
+  authorityAssociations AuthorityApplication[]
 
   @@index([status])
 }
@@ -273,5 +274,137 @@ model MutationAuditEvent {
 
   @@unique([operationId, sequence])
   @@index([childStepId])
+  @@index([timestamp])
+}
+
+model Authority {
+  id              String   @id @default(uuid())
+  installationKey String   @unique @default("PRIMARY")
+  issuerId        String   @unique
+  auditSequence   Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  applications AuthorityApplication[]
+  intents      AuthorityIntent[]
+  auditEvents  AuthorityAuditEvent[]
+
+  @@unique([id, issuerId])
+}
+
+model AuthorityApplication {
+  authorityId        String
+  applicationId      String
+  zimaosAppId        String?
+  pendingIntentId    String?  @unique
+  activeGenerationId String?  @unique
+  stateVersion       Int      @default(0)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  authority        Authority             @relation(fields: [authorityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  application      Application           @relation(fields: [applicationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  pendingIntent    AuthorityIntent?      @relation("PendingAuthorityIntent", fields: [pendingIntentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  activeGeneration AuthorityDeployment?  @relation("ActiveAuthorityDeployment", fields: [activeGenerationId], references: [generationId], onDelete: Restrict, onUpdate: Restrict)
+  intents          AuthorityIntent[]
+  deployments      AuthorityDeployment[]
+
+  @@id([authorityId, applicationId])
+  @@index([applicationId])
+  @@index([authorityId, activeGenerationId])
+  @@index([authorityId, pendingIntentId])
+}
+
+model AuthorityIntent {
+  id                  String    @id @default(uuid())
+  authorityId         String
+  issuerId            String
+  applicationId       String
+  idempotencyKey      String
+  fingerprint         String
+  intentType          String
+  status              String
+  sourceReference     String
+  sourceHash          String
+  requestedServiceSet String
+  reasonCode          String?
+  createdAt           DateTime  @default(now())
+  acceptedAt          DateTime?
+  authorizedAt        DateTime?
+  invalidatedAt       DateTime?
+  updatedAt           DateTime  @updatedAt
+
+  authority             Authority             @relation(fields: [authorityId, issuerId], references: [id, issuerId], onDelete: Restrict, onUpdate: Restrict)
+  authorityApplication  AuthorityApplication  @relation(fields: [authorityId, applicationId], references: [authorityId, applicationId], onDelete: Restrict, onUpdate: Restrict)
+  deployment            AuthorityDeployment?
+  pendingForApplication AuthorityApplication? @relation("PendingAuthorityIntent")
+  auditEvents           AuthorityAuditEvent[]
+
+  @@unique([issuerId, idempotencyKey])
+  @@index([authorityId, applicationId, status])
+  @@index([authorityId, status])
+}
+
+model AuthorityDeployment {
+  generationId  String    @id @default(uuid())
+  authorityId   String
+  applicationId String
+  intentId      String    @unique
+  status        String
+  reasonCode    String?
+  createdAt     DateTime  @default(now())
+  acceptedAt    DateTime?
+  authorizedAt  DateTime?
+  invalidatedAt DateTime?
+  updatedAt     DateTime  @updatedAt
+
+  authorityApplication AuthorityApplication  @relation(fields: [authorityId, applicationId], references: [authorityId, applicationId], onDelete: Restrict, onUpdate: Restrict)
+  intent               AuthorityIntent       @relation(fields: [intentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  services             AuthorityService[]
+  activeForApplication AuthorityApplication? @relation("ActiveAuthorityDeployment")
+  auditEvents          AuthorityAuditEvent[]
+
+  @@index([authorityId, applicationId, status])
+  @@index([status, updatedAt])
+}
+
+model AuthorityService {
+  serviceIdentity        String   @id @default(uuid())
+  deploymentId           String
+  sourceServiceReference String
+  serviceName            String
+  createdAt              DateTime @default(now())
+
+  deployment  AuthorityDeployment   @relation(fields: [deploymentId], references: [generationId], onDelete: Restrict, onUpdate: Restrict)
+  auditEvents AuthorityAuditEvent[]
+
+  @@unique([deploymentId, serviceIdentity])
+  @@unique([deploymentId, sourceServiceReference])
+  @@index([deploymentId])
+}
+
+model AuthorityAuditEvent {
+  id              String   @id @default(uuid())
+  authorityId     String
+  sequence        Int
+  issuerId        String
+  applicationId   String?
+  deploymentId    String?
+  intentId        String?
+  serviceIdentity String?
+  eventType       String
+  status          String?
+  reasonCode      String?
+  timestamp       DateTime
+
+  authority  Authority            @relation(fields: [authorityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  deployment AuthorityDeployment? @relation(fields: [deploymentId], references: [generationId], onDelete: Restrict, onUpdate: Restrict)
+  intent     AuthorityIntent?     @relation(fields: [intentId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  service    AuthorityService?    @relation(fields: [serviceIdentity], references: [serviceIdentity], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([authorityId, sequence])
+  @@index([intentId])
+  @@index([deploymentId])
+  @@index([serviceIdentity])
   @@index([timestamp])
 }

@@ -196,3 +196,4 @@ export type {
 	RuntimeAuthority,
 	RuntimeContainerInput,
 } from "./registry-types.js";
+export * from "./authority/index.js";
