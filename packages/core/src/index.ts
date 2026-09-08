@@ -101,6 +101,18 @@ export type {
 } from "./durable-mutation.js";
 export { InMemoryDurableMutationRepository } from "./in-memory-durable-mutation-repository.js";
 export { PrismaDurableMutationRepository } from "./prisma-durable-mutation-repository.js";
+export {
+  PRODUCTION_SQLITE_ROOT,
+  ProductionSqlitePolicyError,
+  probeProductionSqliteDatabaseFilesystem,
+  validateProductionSqliteDatabaseUrl,
+} from "./production-sqlite-policy.js";
+export type {
+  ProductionSqliteDatabaseLocation,
+  ProductionSqliteFileInfo,
+  ProductionSqliteFilesystem,
+  ProductionSqlitePolicyErrorCode,
+} from "./production-sqlite-policy.js";
 export type {
   Action,
   ActionExecutionResult,

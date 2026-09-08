@@ -1,7 +1,10 @@
 import { PrismaClient } from "@prisma/client";
 import { PrismaAuthRepository } from "./auth/prisma-auth-repository.js";
 import { AuthenticationService } from "./auth/service.js";
-import type { AuthenticatedUser } from "@zima-control-center/core";
+import {
+  validateProductionSqliteDatabaseUrl,
+  type AuthenticatedUser,
+} from "@zima-control-center/core";
 import type { AuthRepository } from "./auth/repository.js";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
@@ -22,7 +25,8 @@ export async function bootstrapFirstAdmin(
 export async function runBootstrapProcess(
   environment: BootstrapEnvironment = process.env,
 ): Promise<boolean> {
-  const databaseUrl = environment.DATABASE_URL?.trim();
+  const rawDatabaseUrl = environment.DATABASE_URL;
+  const databaseUrl = rawDatabaseUrl?.trim();
   const username = environment.AUTH_BOOTSTRAP_USERNAME;
   const password = environment.AUTH_BOOTSTRAP_PASSWORD;
   if (
@@ -31,6 +35,14 @@ export async function runBootstrapProcess(
     || /[\u0000-\u001f\u007f]/.test(databaseUrl)
     || !username
     || !password
+  ) {
+    writeBootstrapLog("error", "auth_bootstrap_failed", "INVALID_CONFIGURATION");
+    process.exitCode = 1;
+    return false;
+  }
+  if (
+    environment.NODE_ENV?.trim().toLowerCase() === "production"
+    && !isApprovedProductionDatabase(rawDatabaseUrl)
   ) {
     writeBootstrapLog("error", "auth_bootstrap_failed", "INVALID_CONFIGURATION");
     process.exitCode = 1;
@@ -55,6 +67,15 @@ export async function runBootstrapProcess(
     return false;
   } finally {
     await prisma.$disconnect().catch(() => undefined);
+  }
+}
+
+function isApprovedProductionDatabase(value: string | undefined): boolean {
+  try {
+    validateProductionSqliteDatabaseUrl(value);
+    return true;
+  } catch {
+    return false;
   }
 }
 

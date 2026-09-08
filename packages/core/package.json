@@ -15,7 +15,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx --test src/registry-runtime.test.ts src/application-registry-service.test.ts src/prisma-registry.integration.test.ts src/auth-policy.test.ts src/mutation-safety.test.ts src/durable-mutation.test.ts src/parent-child-mutation.test.ts src/prisma-durable-mutation.integration.test.ts"
+    "test": "tsx --test src/registry-runtime.test.ts src/application-registry-service.test.ts src/prisma-registry.integration.test.ts src/auth-policy.test.ts src/mutation-safety.test.ts src/durable-mutation.test.ts src/parent-child-mutation.test.ts src/prisma-durable-mutation.integration.test.ts src/production-sqlite-policy.test.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",

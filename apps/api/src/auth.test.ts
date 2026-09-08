@@ -15,7 +15,7 @@ import {
   KdfConcurrencyLimiter,
   LoginRateLimiter,
 } from "./auth/service.js";
-import { bootstrapFirstAdmin } from "./bootstrap.js";
+import { bootstrapFirstAdmin, runBootstrapProcess } from "./bootstrap.js";
 import { safeBootstrapLogRecord } from "./bootstrap.js";
 
 const password = "correct horse battery staple";
@@ -591,6 +591,29 @@ test("bootstrap sends only a derived password hash to the repository", async () 
   assert.match(String(input.passwordHash), /^scrypt\$/);
   assert.notEqual(input.passwordHash, password);
   assert.doesNotMatch(JSON.stringify(input), /correct horse battery staple/);
+});
+
+test("production bootstrap rejects an unapproved SQLite path before constructing persistence", async () => {
+  const previousExitCode = process.exitCode;
+  const previousConsoleError = console.error;
+  const logs: string[] = [];
+  console.error = (...values: unknown[]) => { logs.push(values.map(String).join(" ")); };
+  try {
+    process.exitCode = undefined;
+    assert.equal(await runBootstrapProcess({
+      DATABASE_URL: "file:/tmp/secret-registry.db",
+      NODE_ENV: "production",
+      AUTH_BOOTSTRAP_USERNAME: "admin",
+      AUTH_BOOTSTRAP_PASSWORD: password,
+    }), false);
+    assert.equal(process.exitCode, 1);
+    assert.equal(logs.length, 1);
+    assert.match(logs[0] ?? "", /INVALID_CONFIGURATION/);
+    assert.doesNotMatch(logs[0] ?? "", /DATABASE_URL|tmp|secret-registry|correct horse/i);
+  } finally {
+    console.error = previousConsoleError;
+    process.exitCode = previousExitCode;
+  }
 });
 
 async function login(

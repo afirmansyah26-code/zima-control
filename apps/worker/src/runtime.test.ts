@@ -31,6 +31,31 @@ test("worker validates and normalizes its server-only configuration", () => {
     DATABASE_URL: "postgres://secret",
     ZIMAOS_BASE_URL: "https://zima.example.test",
   }), WorkerRuntimeConfigError);
+  assert.equal(readWorkerRuntimeConfig({
+    DATABASE_URL: "file:worker-test.db",
+    ZIMAOS_BASE_URL: "https://zima.example.test",
+    NODE_ENV: "test",
+  }).databaseUrl, "file:worker-test.db");
+  for (const databaseUrl of [
+    "file:worker.db",
+    "file:/tmp/worker.db",
+    "file:/data/../worker.db",
+    "file:/data/worker.db#fragment",
+  ]) {
+    assert.throws(() => readWorkerRuntimeConfig({
+      DATABASE_URL: databaseUrl,
+      ZIMAOS_BASE_URL: "https://zima.example.test",
+      NODE_ENV: "production",
+    }), (error) => error instanceof WorkerRuntimeConfigError
+      && error.code === "INVALID_DATABASE_URL"
+      && error.message === "Worker runtime configuration is invalid"
+      && !error.message.includes(databaseUrl));
+  }
+  assert.equal(readWorkerRuntimeConfig({
+    DATABASE_URL: "file:/data/registry.db",
+    ZIMAOS_BASE_URL: "https://zima.example.test",
+    NODE_ENV: "production",
+  }).databaseUrl, "file:/data/registry.db");
 });
 
 test("worker bootstrap runs one discovery cycle and always disconnects", async () => {

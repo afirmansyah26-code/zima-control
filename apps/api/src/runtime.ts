@@ -2,6 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import {
   ApplicationRegistryService,
   PrismaRegistryRepository,
+  validateProductionSqliteDatabaseUrl,
   type RegistryReadRepository,
 } from "@zima-control-center/core";
 import type { Hono } from "hono";
@@ -85,12 +86,21 @@ export interface ApiRuntime {
 }
 
 export function readApiRuntimeConfig(environment: EnvironmentSource): ApiRuntimeConfig {
-  const databaseUrl = environment.DATABASE_URL?.trim();
+  const rawDatabaseUrl = environment.DATABASE_URL;
+  const databaseUrl = rawDatabaseUrl?.trim();
   if (!databaseUrl) {
     throw new ApiRuntimeConfigError("MISSING_DATABASE_URL");
   }
+  const production = environment.NODE_ENV?.trim().toLowerCase() === "production";
   if (!databaseUrl.startsWith("file:") || containsControlCharacter(databaseUrl)) {
     throw new ApiRuntimeConfigError("INVALID_DATABASE_URL");
+  }
+  if (production) {
+    try {
+      validateProductionSqliteDatabaseUrl(rawDatabaseUrl);
+    } catch {
+      throw new ApiRuntimeConfigError("INVALID_DATABASE_URL");
+    }
   }
 
   const host = (environment.HOST ?? "0.0.0.0").trim();
@@ -111,7 +121,7 @@ export function readApiRuntimeConfig(environment: EnvironmentSource): ApiRuntime
   if (secureCookieSetting !== undefined && secureCookieSetting !== "true" && secureCookieSetting !== "false") {
     throw new ApiRuntimeConfigError("INVALID_AUTH_COOKIE_SETTING");
   }
-  const authCookieSecure = environment.NODE_ENV?.trim().toLowerCase() === "production"
+  const authCookieSecure = production
     || secureCookieSetting === "true";
   const proxySetting = environment.TRUST_FORWARDED_PROTO?.trim().toLowerCase();
   if (proxySetting !== undefined && proxySetting !== "true" && proxySetting !== "false") {
@@ -142,7 +152,10 @@ export function evaluateProductionCapabilityReadiness(
     case "DISABLED":
       return "DISABLED";
     case "STATUS_ONLY":
-      return inputs.mutationStatus === true ? "STATUS_ONLY" : "NOT_READY";
+      return inputs.mutationStatus === true
+        && inputs.persistentDatabasePolicy === true
+        ? "STATUS_ONLY"
+        : "NOT_READY";
     case "DOCKER_SINGLE_CONTAINER":
       return mutationCapabilityGateNames.every((gate) => inputs[gate] === true)
         ? "MUTATION_READY"
@@ -161,7 +174,12 @@ export async function probeProductionCapabilityReadiness(
   if (!isProductionCapabilityMode(mode)) return "NOT_READY";
   if (mode === "DISABLED") return "DISABLED";
   if (mode === "STATUS_ONLY") {
-    return await probeIsHealthy(probes.mutationStatus) ? "STATUS_ONLY" : "NOT_READY";
+    const mutationStatus = await probeIsHealthy(probes.mutationStatus);
+    if (!mutationStatus) return "NOT_READY";
+    const persistentDatabasePolicy = await probeIsHealthy(
+      probes.persistentDatabasePolicy,
+    );
+    return mutationStatus && persistentDatabasePolicy ? "STATUS_ONLY" : "NOT_READY";
   }
 
   const inputs: ProductionCapabilityReadinessInputs = {};

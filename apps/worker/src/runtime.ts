@@ -1,5 +1,9 @@
 import { PrismaClient } from "@prisma/client";
-import { type DiscoveryResult, type DiscoveryService } from "@zima-control-center/core";
+import {
+  validateProductionSqliteDatabaseUrl,
+  type DiscoveryResult,
+  type DiscoveryService,
+} from "@zima-control-center/core";
 import { createWorkerDiscoveryService } from "./index.js";
 
 export interface EnvironmentSource {
@@ -38,12 +42,20 @@ export type WorkerLogEvent = {
 };
 
 export function readWorkerRuntimeConfig(environment: EnvironmentSource): WorkerRuntimeConfig {
-  const databaseUrl = environment.DATABASE_URL?.trim();
+  const rawDatabaseUrl = environment.DATABASE_URL;
+  const databaseUrl = rawDatabaseUrl?.trim();
   if (!databaseUrl) {
     throw new WorkerRuntimeConfigError("MISSING_DATABASE_URL");
   }
   if (!databaseUrl.startsWith("file:") || containsControlCharacter(databaseUrl)) {
     throw new WorkerRuntimeConfigError("INVALID_DATABASE_URL");
+  }
+  if (environment.NODE_ENV?.trim().toLowerCase() === "production") {
+    try {
+      validateProductionSqliteDatabaseUrl(rawDatabaseUrl);
+    } catch {
+      throw new WorkerRuntimeConfigError("INVALID_DATABASE_URL");
+    }
   }
 
   const rawBaseUrl = environment.ZIMAOS_BASE_URL?.trim();

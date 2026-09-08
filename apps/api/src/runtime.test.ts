@@ -23,7 +23,7 @@ test("API runtime configuration validates required server-only values", () => {
     mutationCapabilityMode: "DISABLED",
   });
   assert.equal(
-    readApiRuntimeConfig({ DATABASE_URL: "file:test.db", NODE_ENV: "production" }).authCookieSecure,
+    readApiRuntimeConfig({ DATABASE_URL: "file:/data/registry.db", NODE_ENV: "production" }).authCookieSecure,
     true,
   );
   assert.equal(
@@ -60,6 +60,25 @@ test("API runtime configuration validates required server-only values", () => {
     && !error.message.includes("DATABASE_URL")
   ));
   assert.throws(() => readApiRuntimeConfig({ DATABASE_URL: "postgres://secret" }), ApiRuntimeConfigError);
+  for (const databaseUrl of [
+    "file:test.db",
+    "file:/tmp/registry.db",
+    "file:/data/../tmp/registry.db",
+    "file:/data/registry.db?mode=unsafe",
+    " file:/data/registry.db",
+  ]) {
+    assert.throws(
+      () => readApiRuntimeConfig({ DATABASE_URL: databaseUrl, NODE_ENV: "production" }),
+      (error) => error instanceof ApiRuntimeConfigError
+        && error.code === "INVALID_DATABASE_URL"
+        && error.message === "API runtime configuration is invalid"
+        && !error.message.includes(databaseUrl),
+    );
+  }
+  assert.equal(
+    readApiRuntimeConfig({ DATABASE_URL: "file:test.db", NODE_ENV: "test" }).databaseUrl,
+    "file:test.db",
+  );
   assert.throws(() => readApiRuntimeConfig({ DATABASE_URL: "file:test.db", PORT: "0" }), ApiRuntimeConfigError);
   assert.throws(() => readApiRuntimeConfig({ DATABASE_URL: "file:test.db", PORT: "abc" }), ApiRuntimeConfigError);
   assert.throws(() => readApiRuntimeConfig({ DATABASE_URL: "file:test.db", HOST: "bad host" }), ApiRuntimeConfigError);
@@ -83,9 +102,16 @@ test("API runtime configuration validates required server-only values", () => {
 });
 
 test("pure capability readiness policy is deterministic, immutable, and fail-closed", () => {
-  const statusInput = Object.freeze({ mutationStatus: true });
+  const statusInput = Object.freeze({
+    mutationStatus: true,
+    persistentDatabasePolicy: true,
+  });
   assert.equal(evaluateProductionCapabilityReadiness("DISABLED"), "DISABLED");
   assert.equal(evaluateProductionCapabilityReadiness("STATUS_ONLY"), "NOT_READY");
+  assert.equal(
+    evaluateProductionCapabilityReadiness("STATUS_ONLY", { mutationStatus: true }),
+    "NOT_READY",
+  );
   assert.equal(evaluateProductionCapabilityReadiness("STATUS_ONLY", statusInput), "STATUS_ONLY");
   assert.equal(
     evaluateProductionCapabilityReadiness("invalid" as unknown as "DISABLED"),
@@ -133,6 +159,7 @@ test("read-only probes call only gates required by the selected mode", async () 
   const disabledCalls: string[] = [];
   const disabled = await probeProductionCapabilityReadiness("DISABLED", {
     mutationStatus: () => { disabledCalls.push("status"); return true; },
+    persistentDatabasePolicy: () => { disabledCalls.push("database"); return true; },
     executorVerifier: () => { disabledCalls.push("docker"); return true; },
   });
   assert.equal(disabled, "DISABLED");
@@ -150,11 +177,16 @@ test("read-only probes call only gates required by the selected mode", async () 
   const statusCalls: string[] = [];
   const statusOnly = await probeProductionCapabilityReadiness("STATUS_ONLY", {
     mutationStatus: () => { statusCalls.push("status"); return true; },
+    persistentDatabasePolicy: () => { statusCalls.push("database"); return true; },
     executorVerifier: () => { statusCalls.push("docker"); return true; },
   });
   assert.equal(statusOnly, "STATUS_ONLY");
-  assert.deepEqual(statusCalls, ["status"]);
+  assert.deepEqual(statusCalls, ["status", "database"]);
   assert.equal(await probeProductionCapabilityReadiness("STATUS_ONLY"), "NOT_READY");
+  assert.equal(await probeProductionCapabilityReadiness("STATUS_ONLY", {
+    mutationStatus: () => true,
+    persistentDatabasePolicy: () => false,
+  }), "NOT_READY");
 });
 
 test("mutation readiness requires every explicit healthy probe and fails closed", async () => {
