@@ -79,7 +79,11 @@ export class PrismaTrustRepository implements TrustRepository {
       const existing = await this.findOperation(input.issuerId, input.idempotencyKey);
       if (existing) return this.replayOrConflict(input, existing);
       const issuer = await this.requireIssuer(input.authorityId, input.issuerId);
-      if (issuer.stateVersion !== input.expectedStateVersion || issuer.currentOperationId !== null) throw staleState();
+      if (issuer.stateVersion !== input.expectedStateVersion || issuer.currentOperationId !== null) {
+        const winner = await this.findOperation(input.issuerId, input.idempotencyKey);
+        if (winner) return this.replayOrConflict(input, winner);
+        throw staleState();
+      }
       const start = operationStart(input.operationType, issuer.trustStatus);
       assertCandidateForOperation(input, issuer);
       const eventTypes = start.events;

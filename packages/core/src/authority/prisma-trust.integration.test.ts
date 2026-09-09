@@ -105,7 +105,7 @@ test("SQLite constraints preserve one binding, one active key, immutable metadat
   }, true);
 });
 
-test("concurrent duplicate provisioning converges and stale trust CAS fails closed", async () => {
+test("concurrent duplicate provisioning converges to one create and one replay", async () => {
   for (let iteration = 0; iteration < 10; iteration += 1) {
     await withDatabase(async ({ prisma, databaseUrl, authorityId, issuerId }) => {
       const other = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
@@ -120,14 +120,51 @@ test("concurrent duplicate provisioning converges and stale trust CAS fails clos
         assert.equal(new Set(fulfilled.map((result) => result.operation.id)).size, 1);
         assert.equal(await prisma.authorityTrustOperation.count(), 1);
         assert.equal(await prisma.authoritySigningKey.count(), 1);
-        const winner = fulfilled[0]!;
-        await first.bindCandidate(step(winner, 1));
-        await assert.rejects(first.validateCandidate(step(winner, 1)), hasCode("STALE_TRUST_STATE"));
       } finally {
         await other.$disconnect();
       }
     });
   }
+});
+
+test("concurrent provisioning with a conflicting fingerprint elects one winner and reports durable conflict", async () => {
+  for (let iteration = 0; iteration < 5; iteration += 1) {
+    await withDatabase(async ({ prisma, databaseUrl, authorityId, issuerId }) => {
+      const other = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+      try {
+        const first = new TrustStateService(new PrismaTrustRepository(prisma));
+        const second = new TrustStateService(new PrismaTrustRepository(other));
+        const base = operationRequest(authorityId, issuerId, "INITIALIZE", 0, keyRequest(1, 70 + iteration * 2));
+        const conflict = { ...base, candidateKey: keyRequest(1, 71 + iteration * 2) };
+        const settled = await Promise.allSettled([first.claim(base), second.claim(conflict)]);
+        const fulfilled = settled.filter((result) => result.status === "fulfilled");
+        const rejected = settled.filter((result) => result.status === "rejected");
+        assert.equal(fulfilled.length, 1);
+        assert.equal(fulfilled[0]!.value.kind, "created");
+        assert.equal(rejected.length, 1);
+        assert.ok(hasCode("TRUST_OPERATION_CONFLICT")(rejected[0]!.reason));
+        assert.equal(await prisma.authorityTrustOperation.count(), 1);
+        assert.equal(await prisma.authoritySigningKey.count(), 1);
+      } finally {
+        await other.$disconnect();
+      }
+    });
+  }
+});
+
+test("issuer state changed without a matching operation remains a genuine stale trust failure", async () => {
+  await withDatabase(async ({ prisma, trust, authorityId, issuerId }) => {
+    await prisma.authorityIssuer.update({
+      where: { issuerId },
+      data: { stateVersion: { increment: 1 }, updatedAt: new Date() },
+    });
+    await assert.rejects(
+      trust.claim(operationRequest(authorityId, issuerId, "INITIALIZE", 0, keyRequest(1, 90))),
+      hasCode("STALE_TRUST_STATE"),
+    );
+    assert.equal(await prisma.authorityTrustOperation.count(), 0);
+    assert.equal(await prisma.authoritySigningKey.count(), 0);
+  });
 });
 
 test("conflicting rotation and rebind races each elect one issuer-scoped winner", async () => {
