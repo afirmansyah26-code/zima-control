@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -44,7 +45,11 @@ test("Prisma provisioning creates the frozen schema and reruns as a no-op", asyn
       "AuthorityAuditEvent",
       "AuthorityDeployment",
       "AuthorityIntent",
+      "AuthorityIssuer",
       "AuthorityService",
+      "AuthoritySigningKey",
+      "AuthorityTrustAuditEvent",
+      "AuthorityTrustOperation",
       "DeploymentNetwork",
       "DeploymentPort",
       "DeploymentVolume",
@@ -58,7 +63,20 @@ test("Prisma provisioning creates the frozen schema and reruns as a no-op", asyn
       "RuntimeContainer",
       "Session",
     ].sort());
-    assert.equal(await migrationCount(prisma), 2);
+    const trustIndexes = await prisma.$queryRawUnsafe<Array<{ name: string }>>(
+      `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name IN ('AuthorityIssuer','AuthoritySigningKey','AuthorityTrustOperation','AuthorityTrustAuditEvent')`,
+    );
+    assert.ok(trustIndexes.some((index) => index.name === "AuthoritySigningKey_one_active_per_issuer"));
+    const trustTriggers = await prisma.$queryRawUnsafe<Array<{ name: string }>>(
+      `SELECT name FROM sqlite_master WHERE type = 'trigger'`,
+    );
+    assert.deepEqual(trustTriggers.map((trigger) => trigger.name).sort(), [
+      "AuthoritySigningKey_identity_immutable",
+      "AuthoritySigningKey_no_delete",
+      "AuthorityTrustAuditEvent_no_delete",
+      "AuthorityTrustAuditEvent_no_update",
+    ]);
+    assert.equal(await migrationCount(prisma), 3);
 
     await prisma.$disconnect();
     prisma = undefined;
@@ -72,7 +90,7 @@ test("Prisma provisioning creates the frozen schema and reruns as a no-op", asyn
 
     prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
     assert.deepEqual(await sqliteTableNames(prisma), firstTables);
-    assert.equal(await migrationCount(prisma), 2);
+    assert.equal(await migrationCount(prisma), 3);
   } finally {
     await prisma?.$disconnect();
     assert.equal(dirname(databasePath), migrationsRoot);
@@ -80,6 +98,60 @@ test("Prisma provisioning creates the frozen schema and reruns as a no-op", asyn
     await rm(databasePath, { force: true });
   }
 });
+
+test("trust migration backfills the normalized issuer as UNINITIALIZED without creating a key", async () => {
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "zima-trust-migration-"));
+  const sourcePrisma = join(projectRoot, "prisma");
+  const databasePath = join(temporaryRoot, "upgrade.db");
+  const absoluteUrl = `file:${databasePath.replaceAll("\\", "/")}`;
+  let prisma: PrismaClient | undefined;
+  try {
+    prisma = new PrismaClient({ datasources: { db: { url: absoluteUrl } } });
+    for (const migration of ["20260908000000_baseline", "20260908120000_authority_identity_state"]) {
+      await executeSqliteMigration(prisma, join(sourcePrisma, "migrations", migration, "migration.sql"));
+    }
+    const authorityId = randomUUID();
+    const issuerId = randomUUID();
+    const timestamp = new Date().toISOString();
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "Authority" ("id","installationKey","issuerId","auditSequence","createdAt","updatedAt") VALUES (?,?,?,?,?,?)`,
+      authorityId, "PRIMARY", issuerId, 0, timestamp, timestamp,
+    );
+    const trustMigration = "20260909120000_trust_persistence_foundation";
+    await executeSqliteMigration(prisma, join(sourcePrisma, "migrations", trustMigration, "migration.sql"));
+    const issuer = await prisma.authorityIssuer.findUniqueOrThrow({ where: { issuerId } });
+    assert.equal(issuer.authorityId, authorityId);
+    assert.equal(issuer.trustStatus, "UNINITIALIZED");
+    assert.equal(issuer.stateVersion, 0);
+    assert.equal(issuer.trustAuditSequence, 0);
+    assert.equal(issuer.activeKeyId, null);
+    assert.equal(issuer.pendingKeyId, null);
+    assert.equal(issuer.currentOperationId, null);
+    assert.equal(await prisma.authoritySigningKey.count(), 0);
+    const authorityColumns = await prisma.$queryRawUnsafe<Array<{ name: string }>>(`PRAGMA table_info("Authority")`);
+    assert.equal(authorityColumns.some((column) => column.name === "issuerId"), false);
+    assert.equal((await prisma.$queryRawUnsafe<unknown[]>("PRAGMA foreign_key_check")).length, 0);
+  } finally {
+    await prisma?.$disconnect();
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+async function executeSqliteMigration(prisma: PrismaClient, path: string): Promise<void> {
+  const sql = await readFile(path, "utf8");
+  let statement = "";
+  let trigger = false;
+  for (const line of sql.split(/\r?\n/)) {
+    if (/^CREATE TRIGGER\b/.test(line.trim())) trigger = true;
+    statement += `${line}\n`;
+    const complete = trigger ? line.trim() === "END;" : line.trim().endsWith(";");
+    if (!complete) continue;
+    await prisma.$executeRawUnsafe(statement);
+    statement = "";
+    trigger = false;
+  }
+  assert.equal(statement.trim(), "");
+}
 
 test("production provisioning validates before running and never substitutes a database", async () => {
   const attemptedUrls: string[] = [];

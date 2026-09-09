@@ -41,6 +41,8 @@ export class AuthorityStateService {
     const authority = existing ?? await this.repository.initializeAuthority({
       authorityId: this.nextId(),
       issuerId: this.nextId(),
+      serviceBoundaryId: this.nextId(),
+      bindingEpoch: this.nextId(),
       now: this.clock(),
     });
     return Object.freeze({ authority, principal: principalFor(authority) });

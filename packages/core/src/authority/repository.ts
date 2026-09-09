@@ -14,6 +14,8 @@ import type {
 export interface InitializeAuthorityInput {
   readonly authorityId: string;
   readonly issuerId: string;
+  readonly serviceBoundaryId: string;
+  readonly bindingEpoch: string;
   readonly now: Date;
 }
 

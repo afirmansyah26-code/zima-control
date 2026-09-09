@@ -125,23 +125,23 @@ model RuntimeContainer {
 }
 
 model User {
-  id           String    @id @default(uuid())
-  username     String    @unique
+  id           String   @id @default(uuid())
+  username     String   @unique
   passwordHash String
   role         String
-  active       Boolean   @default(true)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   sessions Session[]
 }
 
 model Session {
-  id        String   @id @default(uuid())
-  userId    String
-  tokenHash String   @unique
-  expiresAt DateTime
-  createdAt DateTime @default(now())
+  id         String   @id @default(uuid())
+  userId     String
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
   lastSeenAt DateTime
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Restrict)
@@ -185,36 +185,36 @@ model MutationOperation {
 }
 
 model MutationOperationStep {
-  id                         String    @id @default(uuid())
-  parentOperationId          String
-  sequence                   Int
-  applicationId              String
-  deploymentId               String
-  serviceId                  String
-  containerId                String
-  action                     String
-  executionDomain            String
-  targetFingerprint          String
-  snapshotAt                 DateTime
-  authorityEvidence          String
-  applicationDiscoveredAt    DateTime
-  deploymentDiscoveredAt     DateTime
-  runtimeObservedAt          DateTime
-  deadlineAt                 DateTime
-  status                     String    @default("VALIDATED")
-  verificationState          String    @default("NOT_STARTED")
-  recoveryState              String    @default("NONE")
-  externalEffect             String    @default("NOT_STARTED")
-  fencingToken               Int?
-  dispatchFencingToken       Int?
-  dispatchAuthorizedAt       DateTime?
-  reasonCode                 String?
-  startedAt                  DateTime?
-  completedAt                DateTime?
-  createdAt                  DateTime  @default(now())
-  updatedAt                  DateTime  @updatedAt
+  id                      String    @id @default(uuid())
+  parentOperationId       String
+  sequence                Int
+  applicationId           String
+  deploymentId            String
+  serviceId               String
+  containerId             String
+  action                  String
+  executionDomain         String
+  targetFingerprint       String
+  snapshotAt              DateTime
+  authorityEvidence       String
+  applicationDiscoveredAt DateTime
+  deploymentDiscoveredAt  DateTime
+  runtimeObservedAt       DateTime
+  deadlineAt              DateTime
+  status                  String    @default("VALIDATED")
+  verificationState       String    @default("NOT_STARTED")
+  recoveryState           String    @default("NONE")
+  externalEffect          String    @default("NOT_STARTED")
+  fencingToken            Int?
+  dispatchFencingToken    Int?
+  dispatchAuthorizedAt    DateTime?
+  reasonCode              String?
+  startedAt               DateTime?
+  completedAt             DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
 
-  parentOperation MutationOperation   @relation(fields: [parentOperationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  parentOperation MutationOperation    @relation(fields: [parentOperationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   auditEvents     MutationAuditEvent[]
 
   @@unique([parentOperationId, sequence])
@@ -280,16 +280,142 @@ model MutationAuditEvent {
 model Authority {
   id              String   @id @default(uuid())
   installationKey String   @unique @default("PRIMARY")
-  issuerId        String   @unique
   auditSequence   Int      @default(0)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   applications AuthorityApplication[]
-  intents      AuthorityIntent[]
   auditEvents  AuthorityAuditEvent[]
+  issuer       AuthorityIssuer?
+}
 
-  @@unique([id, issuerId])
+model AuthorityIssuer {
+  issuerId           String    @id
+  authorityId        String    @unique
+  serviceBoundaryId  String    @unique
+  trustStatus        String
+  stateVersion       Int       @default(0)
+  trustAuditSequence Int       @default(0)
+  activeKeyId        String?   @unique
+  pendingKeyId       String?   @unique
+  currentOperationId String?   @unique
+  bindingEpoch       String    @unique
+  createdAt          DateTime  @default(now())
+  stateChangedAt     DateTime  @default(now())
+  boundAt            DateTime?
+  activatedAt        DateTime?
+  lastValidatedAt    DateTime?
+  revokedAt          DateTime?
+  rebindRequiredAt   DateTime?
+  failedAt           DateTime?
+  uncertainAt        DateTime?
+  updatedAt          DateTime  @updatedAt
+
+  authority        Authority                  @relation(fields: [authorityId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  keys             AuthoritySigningKey[]      @relation("IssuerSigningKeys")
+  activeKey        AuthoritySigningKey?       @relation("ActiveIssuerKey", fields: [issuerId, activeKeyId], references: [issuerId, id], onDelete: Restrict, onUpdate: Restrict)
+  pendingKey       AuthoritySigningKey?       @relation("PendingIssuerKey", fields: [issuerId, pendingKeyId], references: [issuerId, id], onDelete: Restrict, onUpdate: Restrict)
+  currentOperation AuthorityTrustOperation?   @relation("CurrentTrustOperation", fields: [issuerId, currentOperationId], references: [issuerId, id], onDelete: Restrict, onUpdate: Restrict)
+  intents          AuthorityIntent[]
+  operations       AuthorityTrustOperation[]  @relation("IssuerTrustOperations")
+  trustAuditEvents AuthorityTrustAuditEvent[]
+
+  @@unique([authorityId, issuerId])
+  @@unique([issuerId, activeKeyId])
+  @@unique([issuerId, pendingKeyId])
+  @@unique([issuerId, currentOperationId])
+  @@index([trustStatus])
+}
+
+model AuthoritySigningKey {
+  id                   String    @id @default(uuid())
+  issuerId             String
+  keyVersion           Int
+  publicKey            String
+  publicKeyEncoding    String
+  publicKeyFingerprint String    @unique
+  fingerprintAlgorithm String
+  algorithm            String
+  status               String
+  predecessorKeyId     String?   @unique
+  createdAt            DateTime  @default(now())
+  boundAt              DateTime?
+  validatedAt          DateTime?
+  activatedAt          DateTime?
+  revokedAt            DateTime?
+  failedAt             DateTime?
+  updatedAt            DateTime  @updatedAt
+
+  issuer              AuthorityIssuer            @relation("IssuerSigningKeys", fields: [issuerId], references: [issuerId], onDelete: Restrict, onUpdate: Restrict)
+  predecessor         AuthoritySigningKey?       @relation("SigningKeyPredecessor", fields: [issuerId, predecessorKeyId], references: [issuerId, id], onDelete: Restrict, onUpdate: Restrict)
+  successor           AuthoritySigningKey?       @relation("SigningKeyPredecessor")
+  activeForIssuer     AuthorityIssuer?           @relation("ActiveIssuerKey")
+  pendingForIssuer    AuthorityIssuer?           @relation("PendingIssuerKey")
+  candidateOperations AuthorityTrustOperation[]  @relation("TrustOperationCandidateKey")
+  trustAuditEvents    AuthorityTrustAuditEvent[]
+
+  @@unique([issuerId, keyVersion])
+  @@unique([issuerId, id])
+  @@unique([issuerId, predecessorKeyId])
+  @@index([issuerId, status])
+}
+
+model AuthorityTrustOperation {
+  id                   String    @id @default(uuid())
+  authorityId          String
+  issuerId             String
+  operationType        String
+  status               String
+  idempotencyKey       String
+  requestFingerprint   String
+  correlationId        String
+  actorType            String
+  actorId              String
+  expectedStateVersion Int
+  candidateKeyId       String?
+  reasonCode           String?
+  createdAt            DateTime  @default(now())
+  startedAt            DateTime?
+  completedAt          DateTime?
+  updatedAt            DateTime  @updatedAt
+
+  issuer           AuthorityIssuer            @relation("IssuerTrustOperations", fields: [authorityId, issuerId], references: [authorityId, issuerId], onDelete: Restrict, onUpdate: Restrict)
+  candidateKey     AuthoritySigningKey?       @relation("TrustOperationCandidateKey", fields: [issuerId, candidateKeyId], references: [issuerId, id], onDelete: Restrict, onUpdate: Restrict)
+  currentForIssuer AuthorityIssuer?           @relation("CurrentTrustOperation")
+  auditEvents      AuthorityTrustAuditEvent[]
+
+  @@unique([issuerId, id])
+  @@unique([issuerId, idempotencyKey])
+  @@unique([authorityId, correlationId])
+  @@index([issuerId, status])
+}
+
+model AuthorityTrustAuditEvent {
+  id                   String   @id @default(uuid())
+  authorityId          String
+  issuerId             String
+  sequence             Int
+  operationId          String?
+  keyId                String?
+  keyVersion           Int?
+  publicKeyFingerprint String?
+  eventType            String
+  previousState        String?
+  newState             String?
+  actorType            String?
+  actorId              String?
+  correlationId        String?
+  reasonCode           String?
+  timestamp            DateTime
+
+  issuer    AuthorityIssuer          @relation(fields: [authorityId, issuerId], references: [authorityId, issuerId], onDelete: Restrict, onUpdate: Restrict)
+  operation AuthorityTrustOperation? @relation(fields: [issuerId, operationId], references: [issuerId, id], onDelete: Restrict, onUpdate: Restrict)
+  key       AuthoritySigningKey?     @relation(fields: [issuerId, keyId], references: [issuerId, id], onDelete: Restrict, onUpdate: Restrict)
+
+  @@unique([issuerId, sequence])
+  @@index([operationId])
+  @@index([keyId])
+  @@index([timestamp])
 }
 
 model AuthorityApplication {
@@ -334,7 +460,7 @@ model AuthorityIntent {
   invalidatedAt       DateTime?
   updatedAt           DateTime  @updatedAt
 
-  authority             Authority             @relation(fields: [authorityId, issuerId], references: [id, issuerId], onDelete: Restrict, onUpdate: Restrict)
+  issuerBinding         AuthorityIssuer       @relation(fields: [authorityId, issuerId], references: [authorityId, issuerId], onDelete: Restrict, onUpdate: Restrict)
   authorityApplication  AuthorityApplication  @relation(fields: [authorityId, applicationId], references: [authorityId, applicationId], onDelete: Restrict, onUpdate: Restrict)
   deployment            AuthorityDeployment?
   pendingForApplication AuthorityApplication? @relation("PendingAuthorityIntent")
