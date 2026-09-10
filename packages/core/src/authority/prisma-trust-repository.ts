@@ -13,6 +13,7 @@ import {
 } from "./trust-types.js";
 import type {
   AdvanceAuthorityTrustOperationInput,
+  AppendAuthorityIssuerAuditInput,
   AuthorityIssuerBinding,
   AuthoritySigningKeyRecord,
   AuthoritySigningKeyState,
@@ -48,6 +49,15 @@ export class PrismaTrustRepository implements TrustRepository {
       const row = await this.prisma.authoritySigningKey.findUnique({ where: { id: keyId } });
       if (!row || row.issuerId !== issuerId) return null;
       return mapKey(row);
+    } catch {
+      throw persistenceFailure();
+    }
+  }
+
+  public async getOperation(issuerId: string, idempotencyKey: string): Promise<AuthorityTrustOperationRecord | null> {
+    try {
+      const row = await this.findOperation(issuerId, idempotencyKey);
+      return row ? mapOperation(row) : null;
     } catch {
       throw persistenceFailure();
     }
@@ -278,6 +288,41 @@ export class PrismaTrustRepository implements TrustRepository {
     return (await this.getIssuer(input.authorityId)) ?? (() => { throw persistenceFailure(); })();
   }
 
+  public async appendIssuerAudit(input: AppendAuthorityIssuerAuditInput): Promise<AuthorityTrustAuditEventRecord> {
+    if (!safeAuditInput(input)) throw invalidRequest();
+    for (let attempt = 0; attempt < SQLITE_ATTEMPTS; attempt += 1) {
+      const issuer = await this.requireIssuer(input.authorityId, input.issuerId);
+      if (issuer.stateVersion !== input.expectedStateVersion) throw staleState();
+      const key = input.keyId ? await this.getKey(input.issuerId, input.keyId) : null;
+      if (input.keyId && !key) throw invalidRequest();
+      const id = randomUUID();
+      try {
+        await this.prisma.$transaction([
+          this.prisma.authorityIssuer.update({ where: issuerCas(issuer), data: {
+            trustAuditSequence: { increment: 1 }, updatedAt: input.now,
+          } }),
+          this.prisma.authorityTrustAuditEvent.create({ data: {
+            id, authorityId: input.authorityId, issuerId: input.issuerId,
+            sequence: issuer.trustAuditSequence + 1, operationId: null,
+            keyId: key?.id ?? null, keyVersion: key?.keyVersion ?? null,
+            publicKeyFingerprint: key?.publicKeyFingerprint ?? null,
+            eventType: "TRUST_INVALIDATED", previousState: issuer.trustStatus,
+            newState: issuer.trustStatus, actorType: input.actorType, actorId: input.actorId,
+            correlationId: input.correlationId, reasonCode: input.reasonCode,
+            timestamp: input.now,
+          } }),
+        ], { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        const row = await this.prisma.authorityTrustAuditEvent.findUnique({ where: { id } });
+        if (!row) throw persistenceFailure();
+        return mapAudit(row);
+      } catch (error) {
+        if (!retryable(error) || attempt + 1 >= SQLITE_ATTEMPTS) throw persistenceFailure();
+        await delay(attempt);
+      }
+    }
+    throw persistenceFailure();
+  }
+
   private async advanceCandidate(
     input: AdvanceAuthorityTrustOperationInput,
     expectedKey: AuthoritySigningKeyState,
@@ -444,6 +489,12 @@ function validateClaim(input: ClaimAuthorityTrustOperationInput): void {
 
 function safeText(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+function safeAuditInput(input: AppendAuthorityIssuerAuditInput): boolean {
+  return Number.isInteger(input.expectedStateVersion) && input.expectedStateVersion >= 0
+    && [input.authorityId, input.issuerId, input.actorType, input.actorId, input.correlationId, input.reasonCode].every(safeText)
+    && (input.keyId === undefined || input.keyId === null || safeText(input.keyId));
 }
 
 function issuerCas(issuer: AuthorityIssuerBinding): Prisma.AuthorityIssuerWhereUniqueInput {

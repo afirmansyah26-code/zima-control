@@ -27,7 +27,6 @@ export { PrismaAuthorityRepository } from "./prisma-authority-repository.js";
 export { AuthorityRecoveryService } from "./recovery.js";
 export { AuthorityStateService, principalFor } from "./service.js";
 export type { AuthorityStateServiceOptions } from "./service.js";
-export { PrismaTrustRepository } from "./prisma-trust-repository.js";
 export {
   AUTHORITY_KEY_FINGERPRINT_ALGORITHM,
   AUTHORITY_PUBLIC_KEY_ENCODING,
@@ -35,9 +34,7 @@ export {
 } from "./public-key.js";
 export type { CanonicalAuthorityPublicKey } from "./public-key.js";
 export { transitionAuthoritySigningKey, transitionAuthorityTrust } from "./trust-lifecycle.js";
-export type { TrustRepository } from "./trust-repository.js";
-export { TrustStateService, trustOperationFingerprint } from "./trust-service.js";
-export type { AuthorityTrustOperationRequest, TrustStateServiceOptions } from "./trust-service.js";
+export { trustOperationFingerprint } from "./trust-service.js";
 export {
   authoritySigningKeyStates,
   authorityTrustAuditEventTypes,
@@ -46,7 +43,6 @@ export {
   authorityTrustStates,
 } from "./trust-types.js";
 export type {
-  AdvanceAuthorityTrustOperationInput,
   AuthorityIssuerBinding,
   AuthorityPublicKeyInput,
   AuthoritySigningKeyRecord,
@@ -58,9 +54,6 @@ export type {
   AuthorityTrustOperationStatus,
   AuthorityTrustOperationType,
   AuthorityTrustState,
-  ClaimAuthorityTrustOperationInput,
-  ConcludeAuthorityTrustOperationInput,
-  RequireAuthorityRebindInput,
 } from "./trust-types.js";
 export {
   authorityAuditEventTypes,

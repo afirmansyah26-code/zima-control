@@ -163,3 +163,15 @@ export interface RequireAuthorityRebindInput {
   readonly reasonCode: string;
   readonly now: Date;
 }
+
+export interface AppendAuthorityIssuerAuditInput {
+  readonly authorityId: string;
+  readonly issuerId: string;
+  readonly expectedStateVersion: number;
+  readonly actorType: string;
+  readonly actorId: string;
+  readonly correlationId: string;
+  readonly reasonCode: string;
+  readonly keyId?: string | null;
+  readonly now: Date;
+}
