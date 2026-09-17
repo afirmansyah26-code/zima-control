@@ -468,6 +468,27 @@ test("lifecycle Compose validation is structural and binds exact installed bytes
     createHash("sha256").update(compose).digest("hex"));
 });
 
+test("lifecycle adapter line/byte invariants track the canonical Compose template", async () => {
+  // Single source of truth is deployment/runtime-trust/compose.yaml.in.
+  // The adapter's compiled constants must equal the template's measured
+  // shape, otherwise validate_compose() deterministically rejects the
+  // canonical file (83-vs-80 class drift). No second hard-coded count.
+  const compose = await read("deployment/runtime-trust/compose.yaml.in");
+  const source = await read("native/host-runtime/runtime-lifecycle-adapter.c");
+  assert.match(compose, /\n$/);
+  assert.doesNotMatch(compose, /\r/);
+  const lineCount = compose.split("\n").length - 1;
+  const byteLength = Buffer.byteLength(compose, "utf8");
+  const lineConstant = /if \(line_number != (\d+)U\)/.exec(source);
+  const byteConstant = /normalized_length != (\d+)U/.exec(source);
+  assert.ok(lineConstant, "ADAPTER_LINE_COUNT_INVARIANT_MISSING");
+  assert.ok(byteConstant, "ADAPTER_BYTE_LENGTH_INVARIANT_MISSING");
+  assert.equal(Number(lineConstant[1]), lineCount);
+  assert.equal(Number(byteConstant[1]), byteLength);
+  assert.equal(createHash("sha256").update(compose).digest("hex"),
+    "91bf8d85cdf6513dfbce96bd225bff84c2fbf14a0aaef106975f5f56a73c3118");
+});
+
 test("protected ancestors and stale UDS recovery fail closed", async () => {
   const bootstrap = await read("native/host-runtime/runtime-trust-bootstrap.c");
   const unit = await read("deployment/systemd/zima-control-runtime-stopped-check.service");

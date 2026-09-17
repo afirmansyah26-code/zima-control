@@ -337,7 +337,7 @@ static int normalize_compose(const char *input, size_t input_length,
     } else if (append_bytes(output, 4096U, &used, cursor, line_length) != 0) return -1;
     cursor += line_length;
   }
-  if (line_number != 83U) return -1;
+  if (line_number != 80U) return -1;
   *output_length = used;
   return 0;
 }
