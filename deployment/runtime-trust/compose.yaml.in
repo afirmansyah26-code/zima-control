@@ -1,0 +1,80 @@
+services:
+  authority:
+    image: __AUTHORITY_IMAGE_DIGEST__
+    user: "21012:21012"
+    group_add:
+      - "21013"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - type: bind
+        source: /var/lib/authority-trust/db
+        target: /run/authority-trust-db
+        read_only: true
+        bind:
+          propagation: rprivate
+          create_host_path: false
+      - type: bind
+        source: /run/authority-runtime-trust
+        target: /run/authority-runtime-trust
+        bind:
+          propagation: rprivate
+          create_host_path: false
+      - type: bind
+        source: /run/authority-runtime-bootstrap/authority-readiness-epoch
+        target: /run/authority-readiness/epoch
+        read_only: true
+        bind:
+          propagation: rprivate
+          create_host_path: false
+      - type: bind
+        source: /run/authority-runtime-bootstrap/authority-readiness-state
+        target: /run/authority-readiness/state
+        bind:
+          propagation: rprivate
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m,mode=0700,uid=21012,gid=21012
+    restart: "no"
+    stop_grace_period: 20s
+
+  issuer:
+    image: __ISSUER_IMAGE_DIGEST__
+    user: "21011:21011"
+    group_add:
+      - "21013"
+      - "__ISSUER_READ_GID__"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - type: bind
+        source: /run/authority-runtime-trust
+        target: /run/authority-runtime-trust
+        read_only: true
+        bind:
+          propagation: rprivate
+          create_host_path: false
+      - type: bind
+        source: /run/authority-runtime-bootstrap/issuer-active.pk8
+        target: /run/secrets/authority-trust/issuer-active.pk8
+        read_only: true
+        bind:
+          propagation: rprivate
+          create_host_path: false
+      - type: bind
+        source: /run/authority-runtime-bootstrap/issuer-boundary.json
+        target: /run/secrets/authority-trust/issuer-boundary.json
+        read_only: true
+        bind:
+          propagation: rprivate
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=8m,mode=0700,uid=21011,gid=21011
+    restart: "no"
+    stop_grace_period: 20s

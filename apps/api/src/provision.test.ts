@@ -76,7 +76,7 @@ test("Prisma provisioning creates the frozen schema and reruns as a no-op", asyn
       "AuthorityTrustAuditEvent_no_delete",
       "AuthorityTrustAuditEvent_no_update",
     ]);
-    assert.equal(await migrationCount(prisma), 3);
+    assert.equal(await migrationCount(prisma), 4);
 
     await prisma.$disconnect();
     prisma = undefined;
@@ -119,7 +119,11 @@ test("trust migration backfills the normalized issuer as UNINITIALIZED without c
     );
     const trustMigration = "20260909120000_trust_persistence_foundation";
     await executeSqliteMigration(prisma, join(sourcePrisma, "migrations", trustMigration, "migration.sql"));
-    const issuer = await prisma.authorityIssuer.findUniqueOrThrow({ where: { issuerId } });
+    const [issuer] = await prisma.$queryRawUnsafe<Array<{
+      authorityId: string; trustStatus: string; stateVersion: number; trustAuditSequence: number;
+      activeKeyId: string | null; pendingKeyId: string | null; currentOperationId: string | null;
+    }>>('SELECT * FROM "AuthorityIssuer" WHERE "issuerId"=?', issuerId);
+    assert.ok(issuer);
     assert.equal(issuer.authorityId, authorityId);
     assert.equal(issuer.trustStatus, "UNINITIALIZED");
     assert.equal(issuer.stateVersion, 0);
@@ -127,7 +131,8 @@ test("trust migration backfills the normalized issuer as UNINITIALIZED without c
     assert.equal(issuer.activeKeyId, null);
     assert.equal(issuer.pendingKeyId, null);
     assert.equal(issuer.currentOperationId, null);
-    assert.equal(await prisma.authoritySigningKey.count(), 0);
+    const [keyCount] = await prisma.$queryRawUnsafe<Array<{ count: bigint }>>('SELECT COUNT(*) AS "count" FROM "AuthoritySigningKey"');
+    assert.equal(Number(keyCount?.count), 0);
     const authorityColumns = await prisma.$queryRawUnsafe<Array<{ name: string }>>(`PRAGMA table_info("Authority")`);
     assert.equal(authorityColumns.some((column) => column.name === "issuerId"), false);
     assert.equal((await prisma.$queryRawUnsafe<unknown[]>("PRAGMA foreign_key_check")).length, 0);
@@ -309,8 +314,9 @@ test("API, worker, and bootstrap contain no independent migration owner", async 
     await readFile(resolve(projectRoot, "package.json"), "utf8"),
   ) as { scripts: Record<string, string> };
   assert.equal(rootPackage.scripts["db:provision"], "node apps/api/dist/provision.js");
+  assert.equal(rootPackage.scripts["trust-db:migrate"], "prisma migrate deploy --schema prisma/trust/schema.prisma");
   for (const [name, script] of Object.entries(rootPackage.scripts)) {
-    if (name === "db:provision") continue;
+    if (name === "db:provision" || name === "trust-db:migrate") continue;
     assert.doesNotMatch(script, /migrate\s+deploy|db:provision/);
   }
 

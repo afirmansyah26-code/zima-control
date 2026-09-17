@@ -1,0 +1,30 @@
+[Unit]
+Description=Zima Control Center Authority readiness protected mounts
+Requires=zima-control-runtime-bootstrap.service
+After=zima-control-runtime-bootstrap.service
+Before=zima-control-runtime-authority.service
+PartOf=zima-control-runtime-authority.service
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+WorkingDirectory=/
+ExecStart=/usr/libexec/zima-control-center/runtime-authority-readiness PREPARE
+ExecStop=/usr/libexec/zima-control-center/runtime-authority-readiness CLEANUP
+RemainAfterExit=yes
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
+AmbientCapabilities=
+SystemCallFilter=~setns unshare pivot_root
+
+[Install]
+WantedBy=zima-control-runtime-trust.target

@@ -1,0 +1,28 @@
+[Unit]
+Description=Remove only Zima Control Center runtime trust containers
+Requires=docker.service
+After=zima-control-runtime-issuer.service zima-control-runtime-authority.service docker.service
+Conflicts=zima-control-runtime-trust.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+WorkingDirectory=/
+ExecStart=/usr/libexec/zima-control-center/runtime-lifecycle-adapter REMOVE_RUNTIME_CONTAINERS
+TimeoutStartSec=30s
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=~@mount setns unshare pivot_root

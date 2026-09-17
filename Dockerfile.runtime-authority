@@ -1,0 +1,34 @@
+ARG NODE_22_ALPINE_IMAGE
+FROM ${NODE_22_ALPINE_IMAGE} AS build
+ARG NODE_22_ALPINE_IMAGE
+RUN node -e "if (!/^node:22-alpine@sha256:[a-f0-9]{64}$/.test(process.argv[1])) process.exit(64)" "${NODE_22_ALPINE_IMAGE}"
+RUN apk add --no-cache build-base python3
+WORKDIR /workspace
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY apps ./apps
+COPY packages ./packages
+COPY prisma ./prisma
+RUN npm ci --ignore-scripts
+RUN npx prisma generate --schema prisma/schema.prisma && npm run generate --workspace=@zima-control-center/trust-prisma-client && npm run build --workspace=@zima-control-center/trust-prisma-client && npm run build --workspace=@zima-control-center/core && npm run build --workspace=@zima-control-center/runtime-trust-contracts && npm run build --workspace=@zima-control-center/runtime-trust-linux-peer && npm run build --workspace=@zima-control-center/runtime-trust-authority && npm run build --workspace=@zima-control-center/runtime-authority-daemon && npm run build:native --workspace=@zima-control-center/runtime-trust-linux-peer
+RUN npm prune --omit=dev --omit=optional --ignore-scripts
+
+FROM ${NODE_22_ALPINE_IMAGE} AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+RUN addgroup -g 21012 authority && addgroup -g 21013 authority-ipc && adduser -D -H -u 21012 -G authority authority && addgroup authority authority-ipc && mkdir -p /run/authority-trust-db /run/authority-runtime-trust /run/authority-readiness && chown 0:0 /run/authority-readiness && chmod 0555 /run/authority-readiness
+COPY --from=build /workspace/node_modules ./node_modules
+COPY --from=build /workspace/package.json ./package.json
+COPY --from=build /workspace/apps/runtime-authority/package.json ./apps/runtime-authority/package.json
+COPY --from=build /workspace/apps/runtime-authority/dist ./apps/runtime-authority/dist
+COPY --from=build /workspace/packages/runtime-trust-contracts/package.json ./packages/runtime-trust-contracts/package.json
+COPY --from=build /workspace/packages/runtime-trust-contracts/dist ./packages/runtime-trust-contracts/dist
+COPY --from=build /workspace/packages/runtime-trust-authority/package.json ./packages/runtime-trust-authority/package.json
+COPY --from=build /workspace/packages/runtime-trust-authority/dist ./packages/runtime-trust-authority/dist
+COPY --from=build /workspace/packages/runtime-trust-linux-peer/package.json ./packages/runtime-trust-linux-peer/package.json
+COPY --from=build /workspace/packages/runtime-trust-linux-peer/dist ./packages/runtime-trust-linux-peer/dist
+COPY --from=build /workspace/packages/runtime-trust-linux-peer/build/Release/authority_peer.node ./packages/runtime-trust-linux-peer/build/Release/authority_peer.node
+COPY --from=build /workspace/packages/trust-prisma-client/package.json ./packages/trust-prisma-client/package.json
+COPY --from=build /workspace/packages/trust-prisma-client/dist ./packages/trust-prisma-client/dist
+COPY --from=build /workspace/packages/trust-prisma-client/generated ./packages/trust-prisma-client/generated
+USER 21012:21012
+CMD ["node", "apps/runtime-authority/dist/main.js"]

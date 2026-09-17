@@ -64,7 +64,10 @@ async function readSecret(
   code: "INVALID_IDENTITY" | "INVALID_KEY",
 ) {
   try { return await access.readExact(path, maximumBytes); }
-  catch (error) { if (error instanceof RuntimeTrustError) throw error; throw runtimeTrustError(code); }
+  catch (error) {
+    if (error instanceof RuntimeTrustError && error.code === "TRANSPORT_FAILURE") throw error;
+    throw runtimeTrustError(code);
+  }
 }
 
 class BoundProvider implements IssuerPrivateKeyProvider {

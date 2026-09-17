@@ -1,19 +1,25 @@
 import { randomUUID } from "node:crypto";
-import { Prisma, type PrismaClient } from "@prisma/client";
-import { AuthorityError } from "./errors.js";
-import { assertAuthorityPublicKeyMetadata } from "./public-key.js";
-import { transitionAuthoritySigningKey, transitionAuthorityTrust } from "./trust-lifecycle.js";
-import type { TrustRepository } from "./trust-repository.js";
+import { Prisma, type PrismaClient } from "@zima-control-center/trust-prisma-client";
 import {
+  AuthorityError,
+  assertAuthorityPublicKeyMetadata,
+  transitionAuthoritySigningKey,
+  transitionAuthorityTrust,
   authoritySigningKeyStates,
   authorityTrustAuditEventTypes,
   authorityTrustOperationStatuses,
   authorityTrustOperationTypes,
   authorityTrustStates,
-} from "./trust-types.js";
+} from "@zima-control-center/core";
 import type {
+  TrustRepository,
   AdvanceAuthorityTrustOperationInput,
   AppendAuthorityIssuerAuditInput,
+  ClaimAuthorityTrustOperationInput,
+  ConcludeAuthorityTrustOperationInput,
+  RequireAuthorityRebindInput,
+} from "@zima-control-center/core/trust-persistence-internal";
+import type {
   AuthorityIssuerBinding,
   AuthoritySigningKeyRecord,
   AuthoritySigningKeyState,
@@ -22,10 +28,7 @@ import type {
   AuthorityTrustOperationClaim,
   AuthorityTrustOperationRecord,
   AuthorityTrustState,
-  ClaimAuthorityTrustOperationInput,
-  ConcludeAuthorityTrustOperationInput,
-  RequireAuthorityRebindInput,
-} from "./trust-types.js";
+} from "@zima-control-center/core";
 
 const SQLITE_ATTEMPTS = 5;
 const SQLITE_DELAY_MS = 10;
@@ -596,12 +599,16 @@ function directAuditData(
 }
 
 function retryable(error: unknown): boolean {
-  if (error instanceof Prisma.PrismaClientKnownRequestError) {
-    if (["P2002", "P2025", "P1008"].includes(error.code)) return true;
-    const detail = typeof error.meta?.error === "string" ? error.meta.error : "";
-    return error.code === "P2010" && /SQLITE_BUSY|database is (?:locked|busy)|code.?5\b/i.test(`${error.message}\n${detail}`);
-  }
-  return error instanceof Prisma.PrismaClientUnknownRequestError && /SQLITE_BUSY|database is (?:locked|busy)/i.test(error.message);
+  if (!isPrismaFailure(error)) return false;
+  if (["P2002", "P2025", "P1008"].includes(error.code ?? "")) return true;
+  const detail = typeof error.meta?.error === "string" ? error.meta.error : "";
+  return (error.code === "P2010" || error.code === undefined)
+    && /SQLITE_BUSY|database is (?:locked|busy)|code.?5\b/i.test(`${error.message}\n${detail}`);
+}
+
+function isPrismaFailure(error: unknown): error is { code?: string; message: string; meta?: { error?: unknown } } {
+  return typeof error === "object" && error !== null && "message" in error
+    && typeof (error as { message?: unknown }).message === "string";
 }
 
 async function delay(attempt: number): Promise<void> {

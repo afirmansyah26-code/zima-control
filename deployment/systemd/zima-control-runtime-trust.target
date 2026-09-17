@@ -1,0 +1,8 @@
+[Unit]
+Description=Zima Control Center protected runtime trust
+Requires=zima-control-runtime-bootstrap.service zima-control-runtime-readiness-mount.service zima-control-runtime-authority.service zima-control-runtime-issuer.service
+Upholds=zima-control-runtime-authority.service zima-control-runtime-issuer.service
+After=zima-control-runtime-issuer.service
+
+[Install]
+WantedBy=multi-user.target

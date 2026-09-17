@@ -1,0 +1,31 @@
+ARG NODE_22_ALPINE_IMAGE
+FROM ${NODE_22_ALPINE_IMAGE} AS build
+ARG NODE_22_ALPINE_IMAGE
+RUN node -e "if (!/^node:22-alpine@sha256:[a-f0-9]{64}$/.test(process.argv[1])) process.exit(64)" "${NODE_22_ALPINE_IMAGE}"
+RUN apk add --no-cache build-base python3
+WORKDIR /workspace
+COPY package.json package-lock.json tsconfig.base.json ./
+COPY apps ./apps
+COPY packages ./packages
+COPY prisma ./prisma
+RUN npm ci --ignore-scripts
+RUN npm run build --workspace=@zima-control-center/runtime-trust-contracts && npm run build --workspace=@zima-control-center/runtime-trust-linux-peer && npm run build --workspace=@zima-control-center/runtime-trust-issuer && npm run build --workspace=@zima-control-center/runtime-issuer-daemon && npm run build:native --workspace=@zima-control-center/runtime-trust-linux-peer
+RUN npm prune --omit=dev --omit=optional --ignore-scripts
+
+FROM ${NODE_22_ALPINE_IMAGE} AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+RUN addgroup -g 21011 issuer && addgroup -g 21013 authority-ipc && adduser -D -H -u 21011 -G issuer issuer && addgroup issuer authority-ipc && mkdir -p /run/authority-runtime-trust /run/secrets/authority-trust && chown 0:0 /run/secrets/authority-trust && chmod 0555 /run/secrets/authority-trust
+COPY --from=build /workspace/node_modules ./node_modules
+COPY --from=build /workspace/package.json ./package.json
+COPY --from=build /workspace/apps/runtime-issuer/package.json ./apps/runtime-issuer/package.json
+COPY --from=build /workspace/apps/runtime-issuer/dist ./apps/runtime-issuer/dist
+COPY --from=build /workspace/packages/runtime-trust-contracts/package.json ./packages/runtime-trust-contracts/package.json
+COPY --from=build /workspace/packages/runtime-trust-contracts/dist ./packages/runtime-trust-contracts/dist
+COPY --from=build /workspace/packages/runtime-trust-issuer/package.json ./packages/runtime-trust-issuer/package.json
+COPY --from=build /workspace/packages/runtime-trust-issuer/dist ./packages/runtime-trust-issuer/dist
+COPY --from=build /workspace/packages/runtime-trust-linux-peer/package.json ./packages/runtime-trust-linux-peer/package.json
+COPY --from=build /workspace/packages/runtime-trust-linux-peer/dist ./packages/runtime-trust-linux-peer/dist
+COPY --from=build /workspace/packages/runtime-trust-linux-peer/build/Release/issuer_peer.node ./packages/runtime-trust-linux-peer/build/Release/issuer_peer.node
+USER 21011:21011
+CMD ["node", "apps/runtime-issuer/dist/main.js"]

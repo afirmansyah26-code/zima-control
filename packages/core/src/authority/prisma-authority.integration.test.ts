@@ -47,6 +47,7 @@ test("authority and issuer identities survive restart while registry application
     data: {
       id: randomUUID(),
       installationKey: "SECONDARY",
+      issuerId: randomUUID(),
       createdAt: new Date(),
       updatedAt: new Date(),
     },

@@ -1,5 +1,5 @@
-import type { PrismaClient } from "@prisma/client";
-import { PrismaTrustRepository } from "@zima-control-center/core/trust-persistence-internal";
+import type { PrismaClient } from "@zima-control-center/trust-prisma-client";
+import { PrismaTrustRepository } from "@zima-control-center/trust-persistence";
 import { TrustProvisioningCoordinator, type ProvisioningCoordinatorOptions } from "./coordinator.js";
 import type { TrustFilesystem } from "./filesystem.js";
 

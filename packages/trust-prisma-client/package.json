@@ -1,0 +1,27 @@
+{
+  "name": "@zima-control-center/trust-prisma-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "generate": "prisma generate --schema ../../prisma/trust/schema.prisma",
+    "build": "npm run generate && tsc -p tsconfig.build.json",
+    "typecheck": "npm run generate && tsc --noEmit -p tsconfig.json",
+    "test": "npm run generate"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.0"
+  },
+  "devDependencies": {
+    "prisma": "^6.19.0"
+  }
+}

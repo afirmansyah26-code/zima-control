@@ -4,13 +4,16 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
-import { PrismaClient } from "@prisma/client";
-import { AuthorityError } from "./errors.js";
-import { PrismaAuthorityRepository } from "./prisma-authority-repository.js";
+import { PrismaClient } from "@zima-control-center/trust-prisma-client";
 import { PrismaTrustRepository } from "./prisma-trust-repository.js";
-import { canonicalAuthorityPublicKey } from "./public-key.js";
-import { AuthorityStateService } from "./service.js";
-import { TrustStateService, type AuthorityTrustOperationRequest } from "./trust-service.js";
+import {
+  AuthorityError,
+  canonicalAuthorityPublicKey,
+} from "@zima-control-center/core";
+import {
+  TrustStateService,
+  type AuthorityTrustOperationRequest,
+} from "@zima-control-center/core/trust-persistence-internal";
 
 test("trust aggregate initializes, rotates, retains revoked history, and explicitly rebinds", async () => {
   await withDatabase(async ({ prisma, trust, authorityId, issuerId }) => {
@@ -256,10 +259,17 @@ async function withDatabase(
   const prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
   try {
     await createTrustSchema(prisma, immutableTriggers);
-    const logical = new AuthorityStateService(new PrismaAuthorityRepository(prisma));
-    const initialized = await logical.initialize();
+    const authorityId = randomUUID();
+    const issuerId = randomUUID();
+    const now = new Date();
+    await prisma.authority.create({ data: { id: authorityId, installationKey: "PRIMARY", createdAt: now, updatedAt: now } });
+    await prisma.authorityIssuer.create({ data: {
+      authorityId, issuerId, serviceBoundaryId: randomUUID(), trustStatus: "UNINITIALIZED",
+      stateVersion: 0, trustAuditSequence: 0, bindingEpoch: randomUUID(),
+      createdAt: now, stateChangedAt: now, updatedAt: now,
+    } });
     const trust = new TrustStateService(new PrismaTrustRepository(prisma));
-    await body({ prisma, databaseUrl, trust, authorityId: initialized.authority.id, issuerId: initialized.authority.issuerId });
+    await body({ prisma, databaseUrl, trust, authorityId, issuerId });
     const violations = await prisma.$queryRawUnsafe<Array<{ foreign_key_check: string }>>("PRAGMA foreign_key_check");
     assert.equal(violations.length, 0);
   } finally {
@@ -311,13 +321,12 @@ function hasCode(code: string): (error: unknown) => boolean {
 async function createTrustSchema(prisma: PrismaClient, immutableTriggers: boolean): Promise<void> {
   await prisma.$executeRawUnsafe("PRAGMA foreign_keys = ON");
   const statements = [
-    `CREATE TABLE "Authority" ("id" TEXT NOT NULL PRIMARY KEY, "installationKey" TEXT NOT NULL UNIQUE, "auditSequence" INTEGER NOT NULL DEFAULT 0, "createdAt" DATETIME NOT NULL, "updatedAt" DATETIME NOT NULL)`,
+    `CREATE TABLE "Authority" ("id" TEXT NOT NULL PRIMARY KEY, "installationKey" TEXT NOT NULL UNIQUE, "createdAt" DATETIME NOT NULL, "updatedAt" DATETIME NOT NULL)`,
     `CREATE TABLE "AuthorityIssuer" ("issuerId" TEXT NOT NULL PRIMARY KEY, "authorityId" TEXT NOT NULL UNIQUE, "serviceBoundaryId" TEXT NOT NULL UNIQUE, "trustStatus" TEXT NOT NULL CHECK("trustStatus" IN ('UNINITIALIZED','PROVISIONING','KEY_BOUND','ACTIVE','ROTATING','REVOKED','REBIND_REQUIRED','FAILED','UNCERTAIN')), "stateVersion" INTEGER NOT NULL DEFAULT 0 CHECK("stateVersion" >= 0), "trustAuditSequence" INTEGER NOT NULL DEFAULT 0 CHECK("trustAuditSequence" >= 0), "activeKeyId" TEXT UNIQUE, "pendingKeyId" TEXT UNIQUE, "currentOperationId" TEXT UNIQUE, "bindingEpoch" TEXT NOT NULL UNIQUE, "createdAt" DATETIME NOT NULL, "stateChangedAt" DATETIME NOT NULL, "boundAt" DATETIME, "activatedAt" DATETIME, "lastValidatedAt" DATETIME, "revokedAt" DATETIME, "rebindRequiredAt" DATETIME, "failedAt" DATETIME, "uncertainAt" DATETIME, "updatedAt" DATETIME NOT NULL, FOREIGN KEY("authorityId") REFERENCES "Authority"("id") ON DELETE RESTRICT, FOREIGN KEY("issuerId", "activeKeyId") REFERENCES "AuthoritySigningKey"("issuerId", "id") ON DELETE RESTRICT, FOREIGN KEY("issuerId", "pendingKeyId") REFERENCES "AuthoritySigningKey"("issuerId", "id") ON DELETE RESTRICT, FOREIGN KEY("issuerId", "currentOperationId") REFERENCES "AuthorityTrustOperation"("issuerId", "id") ON DELETE RESTRICT, UNIQUE("authorityId", "issuerId"), UNIQUE("issuerId", "activeKeyId"), UNIQUE("issuerId", "pendingKeyId"), UNIQUE("issuerId", "currentOperationId"))`,
     `CREATE TABLE "AuthoritySigningKey" ("id" TEXT NOT NULL PRIMARY KEY, "issuerId" TEXT NOT NULL, "keyVersion" INTEGER NOT NULL CHECK("keyVersion" > 0), "publicKey" TEXT NOT NULL, "publicKeyEncoding" TEXT NOT NULL CHECK("publicKeyEncoding"='SPKI_DER_BASE64'), "publicKeyFingerprint" TEXT NOT NULL UNIQUE, "fingerprintAlgorithm" TEXT NOT NULL CHECK("fingerprintAlgorithm"='SHA-256'), "algorithm" TEXT NOT NULL, "status" TEXT NOT NULL CHECK("status" IN ('CANDIDATE','BOUND','VALIDATED','ACTIVE','REVOKED','FAILED')), "predecessorKeyId" TEXT UNIQUE, "createdAt" DATETIME NOT NULL, "boundAt" DATETIME, "validatedAt" DATETIME, "activatedAt" DATETIME, "revokedAt" DATETIME, "failedAt" DATETIME, "updatedAt" DATETIME NOT NULL, FOREIGN KEY("issuerId") REFERENCES "AuthorityIssuer"("issuerId") ON DELETE RESTRICT, FOREIGN KEY("issuerId", "predecessorKeyId") REFERENCES "AuthoritySigningKey"("issuerId", "id") ON DELETE RESTRICT, UNIQUE("issuerId", "keyVersion"), UNIQUE("issuerId", "id"), UNIQUE("issuerId", "predecessorKeyId"))`,
     `CREATE UNIQUE INDEX "AuthoritySigningKey_one_active_per_issuer" ON "AuthoritySigningKey"("issuerId") WHERE "status"='ACTIVE'`,
     `CREATE TABLE "AuthorityTrustOperation" ("id" TEXT NOT NULL PRIMARY KEY, "authorityId" TEXT NOT NULL, "issuerId" TEXT NOT NULL, "operationType" TEXT NOT NULL, "status" TEXT NOT NULL, "idempotencyKey" TEXT NOT NULL, "requestFingerprint" TEXT NOT NULL, "correlationId" TEXT NOT NULL, "actorType" TEXT NOT NULL, "actorId" TEXT NOT NULL, "expectedStateVersion" INTEGER NOT NULL, "candidateKeyId" TEXT, "reasonCode" TEXT, "createdAt" DATETIME NOT NULL, "startedAt" DATETIME, "completedAt" DATETIME, "updatedAt" DATETIME NOT NULL, FOREIGN KEY("authorityId", "issuerId") REFERENCES "AuthorityIssuer"("authorityId", "issuerId") ON DELETE RESTRICT, FOREIGN KEY("issuerId", "candidateKeyId") REFERENCES "AuthoritySigningKey"("issuerId", "id") ON DELETE RESTRICT, UNIQUE("issuerId", "id"), UNIQUE("issuerId", "idempotencyKey"), UNIQUE("authorityId", "correlationId"))`,
     `CREATE TABLE "AuthorityTrustAuditEvent" ("id" TEXT NOT NULL PRIMARY KEY, "authorityId" TEXT NOT NULL, "issuerId" TEXT NOT NULL, "sequence" INTEGER NOT NULL, "operationId" TEXT, "keyId" TEXT, "keyVersion" INTEGER, "publicKeyFingerprint" TEXT, "eventType" TEXT NOT NULL, "previousState" TEXT, "newState" TEXT, "actorType" TEXT, "actorId" TEXT, "correlationId" TEXT, "reasonCode" TEXT, "timestamp" DATETIME NOT NULL, FOREIGN KEY("authorityId", "issuerId") REFERENCES "AuthorityIssuer"("authorityId", "issuerId") ON DELETE RESTRICT, FOREIGN KEY("issuerId", "operationId") REFERENCES "AuthorityTrustOperation"("issuerId", "id") ON DELETE RESTRICT, FOREIGN KEY("issuerId", "keyId") REFERENCES "AuthoritySigningKey"("issuerId", "id") ON DELETE RESTRICT, UNIQUE("issuerId", "sequence"))`,
-    `CREATE TABLE "AuthorityAuditEvent" ("id" TEXT NOT NULL PRIMARY KEY, "authorityId" TEXT NOT NULL, "sequence" INTEGER NOT NULL, "issuerId" TEXT NOT NULL, "applicationId" TEXT, "deploymentId" TEXT, "intentId" TEXT, "serviceIdentity" TEXT, "eventType" TEXT NOT NULL, "status" TEXT, "reasonCode" TEXT, "timestamp" DATETIME NOT NULL, FOREIGN KEY("authorityId") REFERENCES "Authority"("id") ON DELETE RESTRICT, UNIQUE("authorityId", "sequence"))`,
   ];
   for (const statement of statements) await prisma.$executeRawUnsafe(statement);
   if (immutableTriggers) {

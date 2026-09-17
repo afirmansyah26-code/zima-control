@@ -3,9 +3,10 @@ import { mkdtemp, readdir, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { PrismaClient } from "@prisma/client";
 import { AuthorityError, type AuthorityIssuerBinding, type AuthoritySigningKeyRecord } from "@zima-control-center/core";
-import { PrismaTrustRepository, type TrustRepository } from "@zima-control-center/core/trust-persistence-internal";
+import type { TrustRepository } from "@zima-control-center/core/trust-persistence-internal";
+import { PrismaTrustRepository } from "@zima-control-center/trust-persistence";
+import { PrismaClient } from "@zima-control-center/trust-prisma-client";
 import { TrustProvisioningCoordinator } from "./coordinator.js";
 import {
   ProvisioningCrashSimulationError,
@@ -480,7 +481,7 @@ async function withFixture(work: (fixture: {
   try {
     await createTrustSchema(prisma);
     const now = new Date("2026-09-09T00:00:00.000Z");
-    await prisma.authority.create({ data: { id: authorityId, installationKey: "PRIMARY", auditSequence: 0, createdAt: now, updatedAt: now } });
+    await prisma.authority.create({ data: { id: authorityId, installationKey: "PRIMARY", createdAt: now, updatedAt: now } });
     await prisma.authorityIssuer.create({ data: {
       issuerId, authorityId, serviceBoundaryId: "boundary-test", trustStatus: "UNINITIALIZED",
       stateVersion: 0, trustAuditSequence: 0, bindingEpoch: "initial-epoch", createdAt: now, stateChangedAt: now, updatedAt: now,
@@ -550,7 +551,7 @@ function hasCode(code: string): (error: unknown) => boolean {
 async function createTrustSchema(prisma: PrismaClient): Promise<void> {
   await prisma.$executeRawUnsafe("PRAGMA foreign_keys = ON");
   const statements = [
-    `CREATE TABLE "Authority" ("id" TEXT NOT NULL PRIMARY KEY, "installationKey" TEXT NOT NULL UNIQUE, "auditSequence" INTEGER NOT NULL DEFAULT 0, "createdAt" DATETIME NOT NULL, "updatedAt" DATETIME NOT NULL)`,
+    `CREATE TABLE "Authority" ("id" TEXT NOT NULL PRIMARY KEY, "installationKey" TEXT NOT NULL UNIQUE, "createdAt" DATETIME NOT NULL, "updatedAt" DATETIME NOT NULL)`,
     `CREATE TABLE "AuthorityIssuer" ("issuerId" TEXT NOT NULL PRIMARY KEY, "authorityId" TEXT NOT NULL UNIQUE, "serviceBoundaryId" TEXT NOT NULL UNIQUE, "trustStatus" TEXT NOT NULL, "stateVersion" INTEGER NOT NULL DEFAULT 0, "trustAuditSequence" INTEGER NOT NULL DEFAULT 0, "activeKeyId" TEXT UNIQUE, "pendingKeyId" TEXT UNIQUE, "currentOperationId" TEXT UNIQUE, "bindingEpoch" TEXT NOT NULL UNIQUE, "createdAt" DATETIME NOT NULL, "stateChangedAt" DATETIME NOT NULL, "boundAt" DATETIME, "activatedAt" DATETIME, "lastValidatedAt" DATETIME, "revokedAt" DATETIME, "rebindRequiredAt" DATETIME, "failedAt" DATETIME, "uncertainAt" DATETIME, "updatedAt" DATETIME NOT NULL, FOREIGN KEY("authorityId") REFERENCES "Authority"("id") ON DELETE RESTRICT, FOREIGN KEY("issuerId", "activeKeyId") REFERENCES "AuthoritySigningKey"("issuerId", "id") ON DELETE RESTRICT, FOREIGN KEY("issuerId", "pendingKeyId") REFERENCES "AuthoritySigningKey"("issuerId", "id") ON DELETE RESTRICT, FOREIGN KEY("issuerId", "currentOperationId") REFERENCES "AuthorityTrustOperation"("issuerId", "id") ON DELETE RESTRICT, UNIQUE("authorityId", "issuerId"), UNIQUE("issuerId", "activeKeyId"), UNIQUE("issuerId", "pendingKeyId"), UNIQUE("issuerId", "currentOperationId"))`,
     `CREATE TABLE "AuthoritySigningKey" ("id" TEXT NOT NULL PRIMARY KEY, "issuerId" TEXT NOT NULL, "keyVersion" INTEGER NOT NULL CHECK("keyVersion">0), "publicKey" TEXT NOT NULL, "publicKeyEncoding" TEXT NOT NULL, "publicKeyFingerprint" TEXT NOT NULL UNIQUE, "fingerprintAlgorithm" TEXT NOT NULL, "algorithm" TEXT NOT NULL, "status" TEXT NOT NULL, "predecessorKeyId" TEXT UNIQUE, "createdAt" DATETIME NOT NULL, "boundAt" DATETIME, "validatedAt" DATETIME, "activatedAt" DATETIME, "revokedAt" DATETIME, "failedAt" DATETIME, "updatedAt" DATETIME NOT NULL, FOREIGN KEY("issuerId") REFERENCES "AuthorityIssuer"("issuerId") ON DELETE RESTRICT, FOREIGN KEY("issuerId", "predecessorKeyId") REFERENCES "AuthoritySigningKey"("issuerId", "id") ON DELETE RESTRICT, UNIQUE("issuerId", "keyVersion"), UNIQUE("issuerId", "id"), UNIQUE("issuerId", "predecessorKeyId"))`,
     `CREATE UNIQUE INDEX "AuthoritySigningKey_one_active_per_issuer" ON "AuthoritySigningKey"("issuerId") WHERE "status"='ACTIVE'`,

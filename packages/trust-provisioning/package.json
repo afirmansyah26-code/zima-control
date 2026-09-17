@@ -14,7 +14,8 @@
     "test": "tsx --test src/*.test.ts"
   },
   "dependencies": {
-    "@prisma/client": "^6.19.0",
-    "@zima-control-center/core": "0.1.0"
+    "@zima-control-center/core": "0.1.0",
+    "@zima-control-center/trust-persistence": "0.1.0",
+    "@zima-control-center/trust-prisma-client": "0.1.0"
   }
 }

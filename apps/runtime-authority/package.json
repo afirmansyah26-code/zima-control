@@ -1,0 +1,18 @@
+{
+  "name": "@zima-control-center/runtime-authority-daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@zima-control-center/runtime-trust-authority": "0.1.0",
+    "@zima-control-center/runtime-trust-contracts": "0.1.0",
+    "@zima-control-center/runtime-trust-linux-peer": "0.1.0",
+    "@zima-control-center/trust-prisma-client": "0.1.0"
+  }
+}

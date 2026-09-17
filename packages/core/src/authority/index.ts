@@ -30,6 +30,7 @@ export type { AuthorityStateServiceOptions } from "./service.js";
 export {
   AUTHORITY_KEY_FINGERPRINT_ALGORITHM,
   AUTHORITY_PUBLIC_KEY_ENCODING,
+  assertAuthorityPublicKeyMetadata,
   canonicalAuthorityPublicKey,
 } from "./public-key.js";
 export type { CanonicalAuthorityPublicKey } from "./public-key.js";

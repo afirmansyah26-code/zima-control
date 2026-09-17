@@ -1,0 +1,19 @@
+{
+  "name": "@zima-control-center/runtime-trust-linux-peer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./authority": { "types": "./dist/authority.d.ts", "import": "./dist/authority.js" },
+    "./issuer": { "types": "./dist/issuer.d.ts", "import": "./dist/issuer.js" }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:native": "node-gyp rebuild",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test src/*.test.ts"
+  },
+  "devDependencies": {
+    "node-gyp": "^11.1.0"
+  }
+}

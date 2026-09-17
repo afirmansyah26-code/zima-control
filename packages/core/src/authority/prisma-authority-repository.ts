@@ -58,22 +58,9 @@ export class PrismaAuthorityRepository implements AuthorityRepository {
           data: {
             id: input.authorityId,
             installationKey: INSTALLATION_KEY,
+            issuerId: input.issuerId,
             auditSequence: 1,
             createdAt: input.now,
-            updatedAt: input.now,
-          },
-        }),
-        this.prisma.authorityIssuer.create({
-          data: {
-            issuerId: input.issuerId,
-            authorityId: input.authorityId,
-            serviceBoundaryId: input.serviceBoundaryId,
-            trustStatus: "UNINITIALIZED",
-            stateVersion: 0,
-            trustAuditSequence: 0,
-            bindingEpoch: input.bindingEpoch,
-            createdAt: input.now,
-            stateChangedAt: input.now,
             updatedAt: input.now,
           },
         }),
@@ -102,7 +89,6 @@ export class PrismaAuthorityRepository implements AuthorityRepository {
     try {
       const row = await this.prisma.authority.findUnique({
         where: { installationKey: INSTALLATION_KEY },
-        include: { issuer: { select: { issuerId: true } } },
       });
       return row ? mapAuthority(row) : null;
     } catch {
@@ -185,13 +171,13 @@ export class PrismaAuthorityRepository implements AuthorityRepository {
       const row = await this.prisma.authorityApplication.findUnique({
         where: { authorityId_applicationId: { authorityId: principal.authorityId, applicationId } },
         include: {
-          authority: { select: { issuer: { select: { issuerId: true } } } },
+          authority: { select: { issuerId: true } },
           pendingIntent: { select: { authorityId: true, applicationId: true } },
           activeGeneration: { select: { authorityId: true, applicationId: true } },
         },
       });
       if (!row) return null;
-      if (row.authority.issuer?.issuerId !== principal.issuerId) throw unauthorized();
+      if (row.authority.issuerId !== principal.issuerId) throw unauthorized();
       if ((row.pendingIntent
           && (row.pendingIntent.authorityId !== row.authorityId || row.pendingIntent.applicationId !== row.applicationId))
         || (row.activeGeneration
@@ -809,9 +795,8 @@ export class PrismaAuthorityRepository implements AuthorityRepository {
     try {
       const row = await this.prisma.authority.findUnique({
         where: { id: principal.authorityId },
-        include: { issuer: { select: { issuerId: true } } },
       });
-      if (!row || row.issuer?.issuerId !== principal.issuerId) throw unauthorized();
+      if (!row || row.issuerId !== principal.issuerId) throw unauthorized();
       return row;
     } catch (error) {
       if (error instanceof AuthorityError) throw error;
@@ -897,9 +882,8 @@ function lifecycleTimestampData(status: AuthorityLifecycleState, now: Date) {
   return {};
 }
 
-function mapAuthority(row: { id: string; issuer: { issuerId: string } | null; createdAt: Date; updatedAt: Date }): AuthorityIdentity {
-  if (!row.issuer) throw persistenceFailure();
-  return Object.freeze({ id: row.id, issuerId: row.issuer.issuerId, createdAt: new Date(row.createdAt), updatedAt: new Date(row.updatedAt) });
+function mapAuthority(row: { id: string; issuerId: string; createdAt: Date; updatedAt: Date }): AuthorityIdentity {
+  return Object.freeze({ id: row.id, issuerId: row.issuerId, createdAt: new Date(row.createdAt), updatedAt: new Date(row.updatedAt) });
 }
 
 function mapApplication(row: {

@@ -1,4 +1,3 @@
-export { PrismaTrustRepository } from "./prisma-trust-repository.js";
 export { TrustStateService } from "./trust-service.js";
 export type { AuthorityTrustOperationRequest, TrustStateServiceOptions } from "./trust-service.js";
 export type { TrustRepository } from "./trust-repository.js";

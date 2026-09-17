@@ -14,7 +14,6 @@
     "test": "tsx --test src/*.test.ts"
   },
   "dependencies": {
-    "@prisma/client": "^6.19.0",
     "@zima-control-center/runtime-trust-contracts": "0.1.0"
   }
 }

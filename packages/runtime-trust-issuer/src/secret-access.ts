@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import { RuntimeTrustError, runtimeTrustError } from "@zima-control-center/runtime-trust-contracts";
 
-const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
+const NOFOLLOW = constants.O_NOFOLLOW;
 
 export interface IssuerSecretFile {
   readonly bytes: Buffer;
@@ -15,7 +15,9 @@ export interface IssuerSecretAccess { readExact(path: string, maximumBytes: numb
 
 export class NodeIssuerSecretAccess implements IssuerSecretAccess {
   public async readExact(path: string, maximumBytes: number): Promise<IssuerSecretFile> {
-    if (process.platform !== "linux") throw runtimeTrustError("TRANSPORT_FAILURE");
+    if (process.platform !== "linux" || typeof NOFOLLOW !== "number" || NOFOLLOW === 0) {
+      throw runtimeTrustError("TRANSPORT_FAILURE");
+    }
     let before;
     try { before = await lstat(path); } catch { throw runtimeTrustError("INVALID_KEY"); }
     if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size < 1 || before.size > maximumBytes) {
@@ -28,8 +30,15 @@ export class NodeIssuerSecretAccess implements IssuerSecretAccess {
       if (!during.isFile() || during.nlink !== 1 || during.dev !== before.dev || during.ino !== before.ino
         || during.size < 1 || during.size > maximumBytes) throw runtimeTrustError("INVALID_KEY");
       const bytes = await handle.readFile();
-      if (bytes.length !== during.size) throw runtimeTrustError("INVALID_KEY");
-      return Object.freeze({ bytes, uid: during.uid, gid: during.gid, mode: during.mode & 0o777, links: during.nlink });
+      const after = await handle.stat();
+      if (bytes.length !== during.size || after.dev !== during.dev || after.ino !== during.ino
+        || after.size !== during.size || after.nlink !== during.nlink || after.uid !== during.uid
+        || after.gid !== during.gid || after.mode !== during.mode
+        || after.mtimeMs !== during.mtimeMs || after.ctimeMs !== during.ctimeMs) {
+        bytes.fill(0);
+        throw runtimeTrustError("INVALID_KEY");
+      }
+      return Object.freeze({ bytes, uid: after.uid, gid: after.gid, mode: after.mode & 0o777, links: after.nlink });
     } catch (error) {
       if (error instanceof RuntimeTrustError) throw error;
       throw runtimeTrustError("INVALID_KEY");

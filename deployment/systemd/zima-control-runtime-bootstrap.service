@@ -1,0 +1,30 @@
+[Unit]
+Description=Zima Control Center protected runtime bootstrap
+Before=zima-control-runtime-readiness-mount.service
+Requires=docker.service zima-control-runtime-stopped-check.service
+After=docker.service zima-control-runtime-stopped-check.service
+ConditionPathIsReadWrite=/run
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+WorkingDirectory=/
+RuntimeDirectory=authority-runtime-bootstrap
+RuntimeDirectoryMode=0700
+ExecStart=/usr/libexec/zima-control-center/runtime-trust-bootstrap PREPARE
+ExecStop=/usr/libexec/zima-control-center/runtime-trust-bootstrap CLEANUP
+RemainAfterExit=yes
+TimeoutStartSec=60s
+TimeoutStopSec=30s
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
+AmbientCapabilities=
+SystemCallFilter=~setns unshare pivot_root
+
+[Install]
+WantedBy=zima-control-runtime-trust.target

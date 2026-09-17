@@ -1,0 +1,40 @@
+[Unit]
+Description=Zima Control Center runtime Issuer
+Requires=docker.service zima-control-runtime-authority.service
+BindsTo=zima-control-runtime-authority.service
+After=docker.service zima-control-runtime-authority.service
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=exec
+User=root
+Group=root
+UMask=0077
+WorkingDirectory=/
+ExecStart=/usr/libexec/zima-control-center/runtime-lifecycle-adapter START_ISSUER
+ExecStop=/usr/libexec/zima-control-center/runtime-lifecycle-adapter STOP_ISSUER
+ExecStopPost=/usr/libexec/zima-control-center/runtime-lifecycle-adapter STATUS_ISSUER
+TimeoutStartSec=60s
+TimeoutStopSec=30s
+Restart=on-failure
+RestartSec=10s
+KillMode=control-group
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallFilter=~@mount setns unshare pivot_root
+SuccessExitStatus=3
+
+[Install]
+WantedBy=zima-control-runtime-trust.target

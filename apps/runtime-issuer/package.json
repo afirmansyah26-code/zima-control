@@ -1,0 +1,17 @@
+{
+  "name": "@zima-control-center/runtime-issuer-daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@zima-control-center/runtime-trust-contracts": "0.1.0",
+    "@zima-control-center/runtime-trust-issuer": "0.1.0",
+    "@zima-control-center/runtime-trust-linux-peer": "0.1.0"
+  }
+}
