@@ -3,6 +3,7 @@ Description=Confirm Zima Control Center runtimes are stopped
 Requires=docker.service
 After=docker.service
 Before=zima-control-runtime-bootstrap.service
+PartOf=zima-control-runtime-bootstrap.service
 
 [Service]
 Type=oneshot
@@ -10,8 +11,11 @@ User=root
 Group=root
 UMask=0077
 WorkingDirectory=/
+RuntimeDirectory=authority-runtime-bootstrap
+RuntimeDirectoryMode=0700
 ExecStart=/usr/libexec/zima-control-center/runtime-lifecycle-adapter STATUS_AUTHORITY
 ExecStart=/usr/libexec/zima-control-center/runtime-lifecycle-adapter STATUS_ISSUER
+RemainAfterExit=yes
 TimeoutStartSec=30s
 NoNewPrivileges=yes
 PrivateTmp=yes

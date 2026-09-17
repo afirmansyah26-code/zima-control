@@ -110,11 +110,20 @@ test("runtime Compose exposes only two fixed non-networked non-root services", a
 });
 
 test("systemd admission orders bootstrap then current Authority readiness then Issuer", async () => {
+  const stoppedCheck = await read("deployment/systemd/zima-control-runtime-stopped-check.service");
   const bootstrap = await read("deployment/systemd/zima-control-runtime-bootstrap.service");
   const readinessMount = await read("deployment/systemd/zima-control-runtime-readiness-mount.service");
   const authority = await read("deployment/systemd/zima-control-runtime-authority.service");
   const issuer = await read("deployment/systemd/zima-control-runtime-issuer.service");
   const target = await read("deployment/systemd/zima-control-runtime-trust.target");
+  assert.match(stoppedCheck, /^Before=zima-control-runtime-bootstrap\.service$/m);
+  assert.match(stoppedCheck, /^PartOf=zima-control-runtime-bootstrap\.service$/m);
+  assert.match(stoppedCheck, /^RuntimeDirectory=authority-runtime-bootstrap$/m);
+  assert.match(stoppedCheck, /^RuntimeDirectoryMode=0700$/m);
+  assert.match(stoppedCheck, /^RemainAfterExit=yes$/m);
+  assert.match(bootstrap, /^Requires=.*zima-control-runtime-stopped-check\.service$/m);
+  assert.match(bootstrap, /^After=.*zima-control-runtime-stopped-check\.service$/m);
+  assert.doesNotMatch(bootstrap, /^RuntimeDirectory=/m);
   assert.match(readinessMount, /Type=oneshot/);
   assert.match(readinessMount, /RemainAfterExit=yes/);
   assert.match(readinessMount, /After=zima-control-runtime-bootstrap\.service/);
@@ -137,6 +146,32 @@ test("systemd admission orders bootstrap then current Authority readiness then I
   assert.match(authority, /^Restart=on-failure$/m);
   assert.match(issuer, /^Restart=on-failure$/m);
   assert.doesNotMatch(authority + issuer, /Environment(File)?=|sd_notify|READY=1/);
+});
+
+test("lifecycle states distinguish pre-bootstrap stopped status from prepared starts", async () => {
+  const stoppedCheck = await read("deployment/systemd/zima-control-runtime-stopped-check.service");
+  const bootstrap = await read("deployment/systemd/zima-control-runtime-bootstrap.service");
+  const adapter = await read("native/host-runtime/runtime-lifecycle-adapter.c");
+
+  // PRE-BOOTSTRAP: systemd first creates the fixed control directory, then
+  // STATUS records stopped-state evidence without requiring protected mounts.
+  assert.ok(stoppedCheck.indexOf("RuntimeDirectory=authority-runtime-bootstrap")
+    < stoppedCheck.indexOf(
+      "ExecStart=/usr/libexec/zima-control-center/runtime-lifecycle-adapter STATUS_AUTHORITY"));
+  assert.match(stoppedCheck, /STATUS_AUTHORITY[\s\S]*STATUS_ISSUER/);
+  const statusAuthority = adapter.slice(adapter.indexOf("OP_STATUS_AUTHORITY) {"),
+    adapter.indexOf("OP_STATUS_ISSUER) {"));
+  const statusIssuer = adapter.slice(adapter.indexOf("OP_STATUS_ISSUER) {"),
+    adapter.indexOf("OP_REMOVE_RUNTIME_CONTAINERS) {"));
+  assert.doesNotMatch(statusAuthority + statusIssuer, /prepared_role\s*=/);
+
+  // PREPARED: only successful PREPARE can precede runtime START, whose fixed
+  // role selects the complete PID-1 prepared-source verification.
+  assert.match(bootstrap, /ExecStart=.*runtime-trust-bootstrap PREPARE/);
+  assert.match(adapter, /OP_START_AUTHORITY\) \{\s*prepared_role = 1;/s);
+  assert.match(adapter, /OP_START_ISSUER\) \{\s*prepared_role = 0;/s);
+  assert.match(adapter,
+    /if \(prepared_role >= 0 && validate_prepared_sources\(prepared_role, issuer_gid\) != 0\)/);
 });
 
 test("parsed systemd relationships continuously recover Issuer without weakening Authority coupling", async () => {
