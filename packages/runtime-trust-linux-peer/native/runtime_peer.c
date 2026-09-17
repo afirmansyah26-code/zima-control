@@ -607,4 +607,9 @@ static napi_value zcc_initialize(napi_env env, napi_value exports) {
   return exports;
 }
 
+/* Node 22's NAPI_MODULE() defines this exported ABI symbol without first
+ * declaring its prototype. Keep -Wmissing-prototypes enabled for this
+ * translation unit and provide the exact public Node-API declaration. */
+NAPI_MODULE_EXPORT int32_t NODE_API_MODULE_GET_API_VERSION(void);
+
 NAPI_MODULE(NODE_GYP_MODULE_NAME, zcc_initialize)

@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { readFile, stat } from "node:fs/promises";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const read = (relative: string) =>
   readFile(fileURLToPath(new URL(relative, import.meta.url)), "utf8");
+
+const packageRoot = fileURLToPath(new URL("../", import.meta.url));
 
 const functionBody = (source: string, name: string) => {
   const declaration = new RegExp(`(?:static\\s+)?[A-Za-z_][A-Za-z0-9_ *]*\\b${name}\\s*\\([^;]*?\\)\\s*\\{`, "s").exec(source);
@@ -115,6 +118,10 @@ test("Authority and Issuer remain separate role-specific artifacts", async () =>
   assert.match(binding, /ZCC_ISSUER_ARTIFACT=1/);
   assert.equal((binding.match(/native\/runtime_peer_pump\.c/g) ?? []).length, 2);
   assert.equal((binding.match(/"-pthread"/g) ?? []).length, 4);
+  assert.equal((binding.match(/"-U_FORTIFY_SOURCE", "-D_FORTIFY_SOURCE=3"/g) ?? []).length, 2);
+  assert.equal((binding.match(/"-Werror"/g) ?? []).length, 2);
+  assert.doesNotMatch(binding, /Wno-missing-prototypes/);
+  assert.match(bridge, /NAPI_MODULE_EXPORT int32_t NODE_API_MODULE_GET_API_VERSION\(void\);/);
   assert.match(bridge, /#if defined\(ZCC_AUTHORITY_ARTIFACT\)/);
   assert.match(bridge, /"createAuthorityListener"/);
   assert.match(bridge, /"connectAuthority"/);
@@ -122,6 +129,26 @@ test("Authority and Issuer remain separate role-specific artifacts", async () =>
   assert.match(functionBody(pump, "zcc_process_connect"), /connect\(/);
   assert.match(pump, /#if defined\(ZCC_AUTHORITY_ARTIFACT\)\s+static void zcc_process_accept/s);
   assert.match(pump, /#if defined\(ZCC_ISSUER_ARTIFACT\)\s+static void zcc_process_connect/s);
+});
+
+test("Linux Node 22 strict build compiles both role-specific native artifacts", {
+  skip: process.platform !== "linux" ? "HOST_NATIVE_BUILD_UNSUPPORTED" : false,
+  timeout: 120_000
+}, async () => {
+  assert.equal(process.versions.node.split(".")[0], "22", "HOST_NATIVE_NODE_22_REQUIRED");
+  const nodeGyp = fileURLToPath(new URL("../../../node_modules/node-gyp/bin/node-gyp.js", import.meta.url));
+  const result = spawnSync(process.execPath, [nodeGyp, "rebuild"], {
+    cwd: packageRoot,
+    encoding: "utf8",
+    maxBuffer: 4 * 1024 * 1024,
+    timeout: 110_000
+  });
+  assert.equal(result.error, undefined, `HOST_NATIVE_BUILD_FAILED:${result.error?.message}`);
+  assert.equal(result.status, 0, `HOST_NATIVE_BUILD_FAILED:${result.stderr}`);
+  for (const artifact of ["authority_peer.node", "issuer_peer.node"]) {
+    const path = fileURLToPath(new URL(`../build/Release/${artifact}`, import.meta.url));
+    assert.ok((await stat(path)).size > 0, `HOST_NATIVE_ARTIFACT_MISSING:${artifact}`);
+  }
 });
 
 test("public surface exposes no FD, pointer, generation, endpoint, or arbitrary path", async () => {
