@@ -37,11 +37,11 @@ export async function run(argv: readonly string[], write: (line: string) => unkn
   }
 }
 
-async function configureTrustDatabase(prisma: PrismaClient): Promise<void> {
-  await prisma.$executeRawUnsafe("PRAGMA journal_mode=DELETE");
+export async function configureTrustDatabase(prisma: PrismaClient): Promise<void> {
+  await prisma.$queryRawUnsafe("PRAGMA journal_mode=DELETE");
   await prisma.$executeRawUnsafe("PRAGMA synchronous=FULL");
   await prisma.$executeRawUnsafe("PRAGMA foreign_keys=ON");
-  await prisma.$executeRawUnsafe("PRAGMA busy_timeout=5000");
+  await prisma.$queryRawUnsafe("PRAGMA busy_timeout=5000");
   const [journal] = await prisma.$queryRawUnsafe<Array<{ journal_mode: string }>>("PRAGMA journal_mode");
   const [synchronous] = await prisma.$queryRawUnsafe<Array<{ synchronous: bigint | number }>>("PRAGMA synchronous");
   const [foreignKeys] = await prisma.$queryRawUnsafe<Array<{ foreign_keys: bigint | number }>>("PRAGMA foreign_keys");
