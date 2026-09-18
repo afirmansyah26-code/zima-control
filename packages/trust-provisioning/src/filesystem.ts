@@ -79,14 +79,16 @@ function mountIsReadOnly(mountTable: string, path: string): boolean {
   let bestLength = -1;
   let bestReadOnly = false;
   for (const line of mountTable.split("\n")) {
-    const match = /^\d+ \d+ \d+:\d+ \S+ (\S+) (\S+) - /.exec(line);
-    if (!match) continue;
-    const mountPoint = match[1]!;
+    const separator = line.indexOf(" - ");
+    if (separator < 0) continue;
+    const prefix = line.slice(0, separator).split(" ");
+    // mountinfo: mount-id parent major:minor root mount-point vfs-options [optional-fields...]
+    if (prefix.length < 6) continue;
+    const mountPoint = prefix[4]!;
     if (mountPoint.length > bestLength && (path === mountPoint || path.startsWith(mountPoint === "/" ? "/" : mountPoint + "/"))) {
       bestLength = mountPoint.length;
-      const optionsField = line.split(" - ")[1] ?? "";
-      const options = optionsField.slice(optionsField.indexOf(" ") + 1);
-      bestReadOnly = options.split(",").includes("ro") && !options.split(",").includes("rw");
+      const vfsOptions = prefix[5]!.split(",");
+      bestReadOnly = vfsOptions.includes("ro") && !vfsOptions.includes("rw");
     }
   }
   return bestLength >= 0 && bestReadOnly;
