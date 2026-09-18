@@ -16,6 +16,7 @@ test("production paths are fixed outside AppData and Docker volumes", () => {
     keyDirectory: "/var/lib/authority-trust/issuer/keys", stagingDirectory: "/var/lib/authority-trust/staging",
     quarantineDirectory: "/var/lib/authority-trust/quarantine", runDirectory: "/run/authority-trust",
     lockFile: "/run/authority-trust/provision.lock",
+    platformOwnershipProfile: "/var/lib/authority-trust/platform-ownership-profile.json",
   });
   assert.doesNotMatch(Object.values(productionTrustPaths).join("\n"), /AppData|\/data|docker|zima/i);
 });

@@ -72,6 +72,7 @@ export class TrustProvisioningCoordinator {
   ): Promise<ProvisioningResult> {
     let issuer = await this.requireIssuer(request.authorityId);
     await this.filesystem.ensureLayout(request.issuerReadGid);
+    await this.filesystem.provisionPlatformOwnershipProfile();
     const manifest = manifestFor(issuer, request.issuerReadGid);
     const existingManifest = await this.filesystem.readManifest();
     if (existingManifest) assertManifest(existingManifest, manifest);
@@ -123,6 +124,7 @@ export class TrustProvisioningCoordinator {
     if (!manifest) throw invalidStorage();
     assertManifest(manifest, manifestFor(issuer, manifest.issuerReadGid));
     await this.filesystem.ensureLayout(manifest.issuerReadGid);
+    await this.filesystem.provisionPlatformOwnershipProfile();
 
     const existing = await this.repository.getOperation(issuer.issuerId, request.idempotencyKey);
     if (existing) return this.resumeExisting(request, issuer, existing, manifest.issuerReadGid, "REBIND");
@@ -244,6 +246,7 @@ export class TrustProvisioningCoordinator {
     catch { return this.handleUnusableManifest(issuer, request); }
     if (!manifest) return this.handleUnusableManifest(issuer, request);
     await this.filesystem.ensureLayout(manifest.issuerReadGid);
+    await this.filesystem.provisionPlatformOwnershipProfile();
     const existing = await this.repository.getOperation(issuer.issuerId, request.idempotencyKey);
     if (existing) return this.resumeExisting(request, issuer, existing, manifest.issuerReadGid);
     if (issuer.trustStatus === "REBIND_REQUIRED") {

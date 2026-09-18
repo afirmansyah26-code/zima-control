@@ -37,6 +37,8 @@
 #define HOST_ROOT "/proc/1/root"
 #define HOST_MOUNTINFO "/proc/1/mountinfo"
 #define TRUST_DB_DIRECTORY "/var/lib/authority-trust/db"
+#define PLATFORM_PROFILE "/var/lib/authority-trust/platform-ownership-profile.json"
+#define PLATFORM_PROFILE_MAX 512
 #define UDS_DIRECTORY "/run/authority-runtime-trust"
 #define KEY_MOUNT "/run/authority-runtime-bootstrap/issuer-active.pk8"
 #define MANIFEST_MOUNT "/run/authority-runtime-bootstrap/issuer-boundary.json"
@@ -182,13 +184,188 @@ static int validate_directory(const char *path, mode_t forbidden) {
   return 0;
 }
 
+static int take_literal(const char **cursor, const char *end, const char *literal) {
+  size_t length = strlen(literal);
+  if ((size_t)(end - *cursor) < length || memcmp(*cursor, literal, length) != 0) return -1;
+  *cursor += length;
+  return 0;
+}
+
 static int validate_installed_ancestors(void) {
   return validate_directory("/", (mode_t)0022) == 0
     && validate_directory("/usr", (mode_t)0022) == 0
-    && validate_directory("/usr/bin", (mode_t)0022) == 0
-    && validate_directory("/usr/lib", (mode_t)0022) == 0
     && validate_directory("/usr/lib/zima-control-center", (mode_t)0022) == 0
     && validate_directory("/usr/lib/zima-control-center/runtime-trust", (mode_t)0022) == 0 ? 0 : -1;
+}
+
+/* ---- Amendment 2C-13.3-A1: platform ownership profile ---- */
+
+typedef struct {
+  unsigned int uid;
+  unsigned int gid;
+} platform_owner;
+
+typedef struct {
+  platform_owner usr_bin;
+  platform_owner usr_lib;
+  int usr_bin_non_root;
+  int usr_lib_non_root;
+} platform_profile;
+
+static int parse_platform_uint(const char **cursor, const char *end,
+                               unsigned int *output) {
+  const char *start = *cursor;
+  unsigned long value = 0UL;
+  if (*cursor >= end) return -1;
+  if (**cursor == '0') {
+    *cursor += 1;
+    if (*cursor < end && **cursor >= '0' && **cursor <= '9') return -1;
+    *output = 0U;
+    return 0;
+  }
+  if (**cursor < '1' || **cursor > '9') return -1;
+  while (*cursor < end && **cursor >= '0' && **cursor <= '9') {
+    value = value * 10UL + (unsigned long)(**cursor - '0');
+    if (value > 2147483647UL) return -1;
+    *cursor += 1;
+  }
+  if (*cursor == start) return -1;
+  *output = (unsigned int)value;
+  return 0;
+}
+
+static int parse_platform_entry(const char **cursor, const char *end,
+                                const char *expected_path,
+                                platform_owner *owner) {
+  if (take_literal(cursor, end, "{\"gid\":") != 0) return -1;
+  if (parse_platform_uint(cursor, end, &owner->gid) != 0) return -1;
+  if (take_literal(cursor, end, ",\"path\":\"") != 0) return -1;
+  {
+    size_t path_length = strlen(expected_path);
+    if ((size_t)(end - *cursor) < path_length + 1U) return -1;
+    if (memcmp(*cursor, expected_path, path_length) != 0) return -1;
+    if ((*cursor)[path_length] != '"') return -1;
+    *cursor += path_length + 1U;
+  }
+  if (take_literal(cursor, end, ",\"uid\":") != 0) return -1;
+  if (parse_platform_uint(cursor, end, &owner->uid) != 0) return -1;
+  if (take_literal(cursor, end, "}") != 0) return -1;
+  return 0;
+}
+
+static int parse_platform_profile(const char *bytes, size_t length,
+                                  platform_profile *profile) {
+  const char *cursor = bytes;
+  const char *end = bytes + length;
+  platform_owner usr_bin;
+  platform_owner usr_lib;
+  if (take_literal(&cursor, end, "{\"ancestors\":[") != 0) return -1;
+  if (parse_platform_entry(&cursor, end, "/usr/bin", &usr_bin) != 0) return -1;
+  if (take_literal(&cursor, end, ",") != 0) return -1;
+  if (parse_platform_entry(&cursor, end, "/usr/lib", &usr_lib) != 0) return -1;
+  if (take_literal(&cursor, end, "],\"schemaVersion\":1}") != 0) return -1;
+  if (cursor != end) return -1;
+  profile->usr_bin = usr_bin;
+  profile->usr_lib = usr_lib;
+  profile->usr_bin_non_root = (usr_bin.uid != 0U || usr_bin.gid != 0U);
+  profile->usr_lib_non_root = (usr_lib.uid != 0U || usr_lib.gid != 0U);
+  return 0;
+}
+
+static int load_platform_profile(platform_profile *profile) {
+  int fd;
+  struct stat before;
+  struct stat descriptor;
+  struct stat after;
+  char bytes[PLATFORM_PROFILE_MAX];
+  ssize_t length;
+  fd = open(PLATFORM_PROFILE, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  if (fd < 0) return -1;
+  if (fstat(fd, &before) != 0 || lstat(PLATFORM_PROFILE, &after) != 0) {
+    (void)close(fd); return -1;
+  }
+  if (!S_ISREG(before.st_mode) || before.st_uid != 0U || before.st_gid != 0U
+      || before.st_nlink != (nlink_t)1
+      || (before.st_mode & (mode_t)07777) != (mode_t)0640
+      || before.st_dev != after.st_dev || before.st_ino != after.st_ino) {
+    (void)close(fd); return -1;
+  }
+  length = read(fd, bytes, sizeof(bytes));
+  if (fstat(fd, &descriptor) != 0 || lstat(PLATFORM_PROFILE, &after) != 0
+      || before.st_dev != descriptor.st_dev || before.st_ino != descriptor.st_ino
+      || descriptor.st_dev != after.st_dev || descriptor.st_ino != after.st_ino) {
+    (void)close(fd); return -1;
+  }
+  (void)close(fd);
+  if (length <= 0 || length >= (ssize_t)sizeof(bytes)) return -1;
+  return parse_platform_profile(bytes, (size_t)length, profile);
+}
+
+static int mount_option(const char *options, const char *expected);
+
+static int covering_mount_is_ro(const char *path) {
+  FILE *file = fopen(HOST_MOUNTINFO, "re");
+  char line[4096];
+  size_t best_length = 0U;
+  int best_ro = -1;
+  int covering = 0;
+  if (file == NULL) return -1;
+  while (fgets(line, (int)sizeof(line), file) != NULL) {
+    unsigned long mount_id;
+    unsigned int device_major;
+    unsigned int device_minor;
+    char mount_point[PATH_MAX];
+    char options[1024];
+    size_t mount_point_length;
+    if (strchr(line, '\n') == NULL && feof(file) == 0) { covering = -1; break; }
+    if (sscanf(line, "%lu %*s %u:%u %*s %4095s %1023s",
+        &mount_id, &device_major, &device_minor, mount_point, options) == 5
+        && mount_id > 0UL) {
+      mount_point_length = strlen(mount_point);
+      if (mount_point_length <= strlen(path)
+          && strncmp(mount_point, path, mount_point_length) == 0
+          && mount_point_length > best_length) {
+        best_length = mount_point_length;
+        best_ro = (mount_option(options, "ro") != 0
+          && mount_option(options, "rw") == 0) ? 1 : 0;
+        covering += 1;
+      }
+    }
+  }
+  if (ferror(file) != 0) covering = -1;
+  (void)fclose(file);
+  if (covering != 1 || best_ro != 1) return -1;
+  return 0;
+}
+
+static int validate_platform_directory(const char *path, const platform_owner *owner,
+                                       int non_root) {
+  int fd;
+  struct stat before;
+  struct stat descriptor;
+  struct stat after;
+  if (lstat(path, &before) != 0 || !S_ISDIR(before.st_mode) || S_ISLNK(before.st_mode)
+      || before.st_uid != (uid_t)owner->uid || before.st_gid != (gid_t)owner->gid
+      || (before.st_mode & (mode_t)0022) != 0U) return -1;
+  if (non_root != 0 && covering_mount_is_ro(path) != 0) return -1;
+  fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (fd < 0 || fstat(fd, &descriptor) != 0 || lstat(path, &after) != 0
+      || before.st_dev != descriptor.st_dev || before.st_ino != descriptor.st_ino
+      || descriptor.st_dev != after.st_dev || descriptor.st_ino != after.st_ino) {
+    if (fd >= 0) (void)close(fd); return -1;
+  }
+  (void)close(fd);
+  return 0;
+}
+
+static int validate_platform_ancestors(void) {
+  platform_profile profile;
+  if (load_platform_profile(&profile) != 0) return -1;
+  if (validate_platform_directory("/usr/bin", &profile.usr_bin,
+        profile.usr_bin_non_root) != 0) return -1;
+  if (validate_platform_directory("/usr/lib", &profile.usr_lib,
+        profile.usr_lib_non_root) != 0) return -1;
+  return 0;
 }
 
 static int full_write(int fd, const char *bytes, size_t length) {
@@ -808,7 +985,8 @@ int main(int argc, char **argv) {
   }
   environ = (char *[]){ NULL };
   (void)umask((mode_t)0077);
-  if (validate_installed_ancestors() != 0 || validate_regular(DOCKER, (mode_t)0022, 1) != 0
+  if (validate_installed_ancestors() != 0 || validate_platform_ancestors() != 0
+      || validate_regular(DOCKER, (mode_t)0022, 1) != 0
       || validate_compose(&issuer_gid) != 0) {
     result = 65;
     error_code = "INVALID_INSTALLATION";

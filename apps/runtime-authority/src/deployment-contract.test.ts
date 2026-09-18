@@ -524,6 +524,71 @@ test("lifecycle adapter line/byte invariants track the canonical Compose templat
     "91bf8d85cdf6513dfbce96bd225bff84c2fbf14a0aaef106975f5f56a73c3118");
 });
 
+test("platform-aware ancestor validation follows Amendment 2C-13.3-A1", async () => {
+  const adapter = await read("native/host-runtime/runtime-lifecycle-adapter.c");
+  const stoppedCheck = await read("deployment/systemd/zima-control-runtime-stopped-check.service");
+  const provisioning = await read("packages/trust-provisioning/src/filesystem.ts");
+  const coordinator = await read("packages/trust-provisioning/src/coordinator.ts");
+  const constants = await read("packages/trust-provisioning/src/constants.ts");
+
+  // Two-tier classification: strict root:root ancestors remain, plus
+  // exactly two platform-profiled ancestors.
+  assert.match(adapter, /validate_directory\("\/", \(mode_t\)0022\)/);
+  assert.match(adapter, /validate_directory\("\/usr", \(mode_t\)0022\)/);
+  assert.match(adapter, /validate_directory\("\/usr\/lib\/zima-control-center", \(mode_t\)0022\)/);
+  assert.match(adapter, /validate_directory\("\/usr\/lib\/zima-control-center\/runtime-trust", \(mode_t\)0022\)/);
+  assert.match(adapter, /validate_platform_directory\("\/usr\/bin", &profile\.usr_bin/);
+  assert.match(adapter, /validate_platform_directory\("\/usr\/lib", &profile\.usr_lib/);
+  assert.doesNotMatch(adapter, /validate_platform_directory\("\/"/);
+  assert.doesNotMatch(adapter, /validate_platform_directory\("\/usr"/);
+
+  // No hard-coded platform uid (1001) anywhere in the adapter.
+  assert.doesNotMatch(adapter, /\b1001\b/);
+
+  // Strict byte-oriented profile parser: fixed grammar, canonical only.
+  assert.match(adapter, /PLATFORM_PROFILE "\/var\/lib\/authority-trust\/platform-ownership-profile\.json"/);
+  assert.match(adapter, /parse_platform_profile/);
+  assert.match(adapter, /"\{\\"ancestors\\":\["/);
+  assert.match(adapter, /"\],\\"schemaVersion\\":1\}"/);
+  assert.match(adapter, /value > 2147483647UL/);
+  assert.match(adapter, /\/usr\/lib-resolved|memcmp\(\*cursor, expected_path, path_length\)/);
+  assert.match(adapter, /\(before\.st_mode & \(mode_t\)07777\) != \(mode_t\)0640/);
+  assert.match(adapter, /O_RDONLY \| O_NOFOLLOW \| O_CLOEXEC/);
+
+  // Conditional RO proof reuses existing mountinfo semantics; no weaker duplicate.
+  assert.match(adapter, /covering_mount_is_ro/);
+  assert.match(adapter, /mount_option\(options, "ro"\) != 0/);
+  assert.match(adapter, /mount_option\(options, "rw"\) == 0/);
+  assert.match(adapter, /HOST_MOUNTINFO "\/proc\/1\/mountinfo"/);
+
+  // Profile is never written by the adapter (runtime read-only trust anchor).
+  assert.doesNotMatch(adapter, /O_CREAT[^\n]*PLATFORM_PROFILE/);
+  assert.doesNotMatch(adapter, /rename\([^\n]*PLATFORM_PROFILE/);
+
+  // Provisioning owns the profile: provisioned in initialize/rebind/recover
+  // after ensureLayout, never in runtime paths.
+  assert.match(constants, /platformOwnershipProfile: "\/var\/lib\/authority-trust\/platform-ownership-profile\.json"/);
+  assert.match(constants, /PLATFORM_OWNERSHIP_PROFILE_PATHS = Object\.freeze\(\["\/usr\/bin", "\/usr\/lib"\]/);
+  assert.match(provisioning, /provisionPlatformOwnershipProfile\(\): Promise<void>/);
+  assert.match(provisioning, /canonicalJson\(document\)/);
+  assert.match(provisioning, /constants\.O_CREAT \| constants\.O_EXCL/);
+  assert.match(provisioning, /rename\(temporary, profilePath\)/);
+  assert.match(provisioning, /\(info\.mode & 0o0022\) !== 0\) throw invalidStorage\(\)/);
+  assert.match(provisioning, /mountIsReadOnly\(mountTable, "\/usr"\)/);
+  const initCall = coordinator.indexOf("await this.filesystem.provisionPlatformOwnershipProfile();");
+  assert.ok(initCall > coordinator.indexOf("ensureLayout(request.issuerReadGid)"),
+    "INITIALIZE must provision profile after ensureLayout");
+  assert.match(coordinator,
+    /ensureLayout\(manifest\.issuerReadGid\);\s*\n\s*await this\.filesystem\.provisionPlatformOwnershipProfile\(\);/g);
+  assert.equal((coordinator.match(/provisionPlatformOwnershipProfile\(\);/g) ?? []).length, 3);
+
+  // Profile availability before the first lifecycle unit.
+  assert.match(stoppedCheck,
+    /^Requires=docker\.service var-lib-authority\\x2dtrust\.mount$/m);
+  assert.match(stoppedCheck,
+    /^After=docker\.service var-lib-authority\\x2dtrust\.mount$/m);
+});
+
 test("protected ancestors and stale UDS recovery fail closed", async () => {
   const bootstrap = await read("native/host-runtime/runtime-trust-bootstrap.c");
   const unit = await read("deployment/systemd/zima-control-runtime-stopped-check.service");

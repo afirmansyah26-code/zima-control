@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import {
-  chmod, chown, lstat, mkdir, open, opendir, readFile, realpath, rename, statfs, unlink,
+  chmod, chown, lstat, mkdir, open, opendir, readFile, realpath, rename, statfs, unlink, writeFile,
   type FileHandle,
 } from "node:fs/promises";
 import { dirname, join, posix, resolve, sep } from "node:path";
@@ -10,6 +10,7 @@ import {
   MAX_DIRECTORY_ENTRIES,
   MAX_PRIVATE_KEY_BYTES,
   MAX_SIDECAR_BYTES,
+  PLATFORM_OWNERSHIP_PROFILE_PATHS,
   productionTrustPaths,
 } from "./constants.js";
 import { assertPrivateKeyMatches, derivePublicMetadata } from "./crypto.js";
@@ -27,6 +28,7 @@ export interface TrustPathLayout {
   readonly quarantineDirectory: string;
   readonly runDirectory: string;
   readonly lockFile: string;
+  readonly platformOwnershipProfile: string;
 }
 
 export interface StageArtifactInventory {
@@ -38,6 +40,7 @@ export interface StageArtifactInventory {
 
 export interface TrustFilesystem {
   ensureLayout(issuerReadGid: number): Promise<void>;
+  provisionPlatformOwnershipProfile(): Promise<void>;
   readManifest(): Promise<IssuerBoundaryManifest | null>;
   publishManifest(value: IssuerBoundaryManifest): Promise<void>;
   readStagedKey(stageId: string): Promise<Buffer | null>;
@@ -72,8 +75,90 @@ interface FilesystemPolicy {
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0;
 const NETWORK_FS_MAGIC = new Set([0x6969, 0x517b, 0xff534d42, 0x65735546, 0x73757245]);
 
+function mountIsReadOnly(mountTable: string, path: string): boolean {
+  let bestLength = -1;
+  let bestReadOnly = false;
+  for (const line of mountTable.split("\n")) {
+    const match = /^\d+ \d+ \d+:\d+ \S+ (\S+) (\S+) - /.exec(line);
+    if (!match) continue;
+    const mountPoint = match[1]!;
+    if (mountPoint.length > bestLength && (path === mountPoint || path.startsWith(mountPoint === "/" ? "/" : mountPoint + "/"))) {
+      bestLength = mountPoint.length;
+      const optionsField = line.split(" - ")[1] ?? "";
+      const options = optionsField.slice(optionsField.indexOf(" ") + 1);
+      bestReadOnly = options.split(",").includes("ro") && !options.split(",").includes("rw");
+    }
+  }
+  return bestLength >= 0 && bestReadOnly;
+}
+
 export class NodeTrustFilesystem implements TrustFilesystem {
   public constructor(private readonly policy: FilesystemPolicy) {}
+
+  public async provisionPlatformOwnershipProfile(): Promise<void> {
+    const profilePath = this.policy.paths.platformOwnershipProfile;
+    const observed = new Map<string, { uid: number; gid: number }>();
+    for (const path of PLATFORM_OWNERSHIP_PROFILE_PATHS) {
+      const info = await lstat(path);
+      if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 0o0022) !== 0) throw invalidStorage();
+      const mountInfo = await statfs(path);
+      if (NETWORK_FS_MAGIC.has(Number(mountInfo.type))) throw invalidStorage();
+      observed.set(path, { uid: Number(info.uid), gid: Number(info.gid) });
+    }
+    let mountTable: string;
+    try { mountTable = await readFile("/proc/1/mountinfo", "utf8"); }
+    catch { throw invalidStorage(); }
+    if (observed.has("/usr/bin") || observed.has("/usr/lib")) {
+      const nonRoot = [...observed.entries()].some(([, owner]) => owner.uid !== 0 || owner.gid !== 0);
+      if (nonRoot && !mountIsReadOnly(mountTable, "/usr")) throw invalidStorage();
+    }
+    const document = {
+      schemaVersion: 1 as const,
+      ancestors: PLATFORM_OWNERSHIP_PROFILE_PATHS.map((path) => ({
+        path, gid: observed.get(path)!.gid, uid: observed.get(path)!.uid,
+      })).sort((left, right) => left.path.localeCompare(right.path)),
+    };
+    const bytes = Buffer.from(canonicalJson(document), "utf8");
+    const existing = await this.readPlatformOwnershipProfileBytes();
+    if (existing && existing.equals(bytes)) return;
+    if (existing) throw new TrustProvisioningError("INVALID_STORAGE_POLICY");
+    const temporary = `${profilePath}.tmp-${randomUUID()}`;
+    const handle = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    try {
+      await handle.writeFile(bytes);
+      if (!this.policy.allowNonPosix) await handle.chown(0, 0);
+      if (!this.policy.allowNonPosix) await handle.chmod(0o640);
+      await handle.sync();
+    } finally { await handle.close(); }
+    await rename(temporary, profilePath);
+    const directory = await open(dirname(profilePath), constants.O_RDONLY | constants.O_DIRECTORY);
+    try { await directory.sync(); } finally { await directory.close(); }
+    if (!this.policy.allowNonPosix) await this.validatePlatformOwnershipProfileNode();
+    const verified = await this.readPlatformOwnershipProfileBytes();
+    if (!verified || !verified.equals(bytes)) throw invalidStorage();
+  }
+
+  private async readPlatformOwnershipProfileBytes(): Promise<Buffer | null> {
+    const path = this.policy.paths.platformOwnershipProfile;
+    let info;
+    try { info = await lstat(path); }
+    catch (error: any) {
+      if (error?.code === "ENOENT") return null;
+      throw invalidStorage();
+    }
+    void info;
+    return readFile(path);
+  }
+
+  private async validatePlatformOwnershipProfileNode(): Promise<void> {
+    const path = this.policy.paths.platformOwnershipProfile;
+    await this.validateAncestors(path);
+    const info = await lstat(path);
+    if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1
+      || Number(info.uid) !== 0 || Number(info.gid) !== 0
+      || (Number(info.mode) & 0o7777) !== 0o640) throw invalidStorage();
+    if (await realpath(path) !== resolve(path)) throw invalidStorage();
+  }
 
   public async ensureLayout(issuerReadGid: number): Promise<void> {
     assertGid(issuerReadGid);

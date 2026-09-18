@@ -784,7 +784,6 @@ The following remain deferred and unauthorized:
 
 - production installation or activation of the units and adapter;
 - runtime daemon implementation and execution;
-- native validation on the target ZimaOS host;
 - any ZimaOS App Management mutation API or undocumented hook;
 - generic Docker authorization, API proxy, or socket mediation;
 - image acquisition/removal automation beyond an exact host package manifest;
@@ -795,5 +794,155 @@ The following remain deferred and unauthorized:
   and
 - support for rootless Docker, user namespace remapping, non-systemd hosts, or a
   different Docker service/client path without a reviewed freeze update.
+
+SPECIFICATION FREEZE COMPLETE (AS AMENDED BY AMENDMENT 2C-13.3-A1 BELOW)
+
+## 30. Amendment 2C-13.3-A1 — Platform-Aware Ancestor Validation
+
+Status: ratified on the basis of native ZimaOS v1.7.1 staging evidence
+(buildroot-owned base `/usr` tree, read-only `/usr` sysext overlay).
+This amendment narrows only the ancestor-ownership predicate of the
+lifecycle adapter. Every other control in this freeze is unchanged.
+
+### 30.1 Path classes
+
+STRICT ROOT-OWNED (validated exactly as before: owner 0 group 0, exact
+required mode, single link, directory/regular type, no symlink,
+O_NOFOLLOW, lstat/fstat/lstat device+inode continuity):
+
+- `/`
+- `/usr`
+- `/usr/lib/zima-control-center`
+- `/usr/lib/zima-control-center/runtime-trust`
+- `/usr/bin/docker` (platform-consumed binary; strict validation is
+  retained because the adapter depends on it, not because ZCC owns it)
+- every ZCC-controlled file (adapter executable, Compose definition,
+  Compose digest sidecar)
+
+PLATFORM-PROFILED (ownership verified against the trusted Platform
+Ownership Profile instead of requiring numeric root):
+
+- `/usr/bin`
+- `/usr/lib`
+
+Any required ancestor outside these classes is terminal.
+
+### 30.2 Platform Ownership Profile
+
+Canonical document (exact bytes; no whitespace variance permitted):
+
+```json
+{"ancestors":[{"gid":<int>,"path":"/usr/bin","uid":<int>},{"gid":<int>,"path":"/usr/lib","uid":<int>}],"schemaVersion":1}
+```
+
+Normative grammar (byte-oriented, no whitespace, exact key order):
+
+```text
+doc        := '{"ancestors":[' entry ',' entry '],"schemaVersion":1}'
+entry      := '{"gid":' uint ',"path":"/usr/bin"|"/usr/lib","uid":' uint '}'
+uint       := '0' | [1-9][0-9]*
+```
+
+The two entries MUST appear in ascending path order (`/usr/bin` before
+`/usr/lib`). Only the exact paths `/usr/bin` and `/usr/lib` are valid;
+all other path tokens, including look-alikes such as `/usr/lib-resolved`,
+MUST be rejected. Integer values are non-negative, at most 2147483647,
+with no leading zeros. `schemaVersion` is exactly `1`. No additional
+fields, no timestamps, no inode/device values.
+
+### 30.3 Profile storage and file invariants
+
+The profile resides only at:
+
+```text
+/var/lib/authority-trust/platform-ownership-profile.json
+```
+
+File invariants, enforced on every read: regular file; no symlink;
+owner 0 group 0; mode exactly `0640`; single link; opened
+`O_RDONLY|O_NOFOLLOW|O_CLOEXEC`; lstat/fstat/lstat device+inode
+continuity within the read window; file bytes byte-identical to the
+canonical grammar representation. A missing, malformed, tampered, or
+non-canonical profile is terminal (fail closed).
+
+### 30.4 Provisioning (the only profile writer)
+
+The profile is created or replaced ONLY inside the trust provisioning
+boundary operations `initialize`, `rebind`, and `recover`, at the point
+after protected layout (`ensureLayout`) succeeds and while the global
+host lock and host-admin authorization gate are held. Runtime adapter
+operations (STATUS_*/START_*/STOP_*/REMOVE_RUNTIME_CONTAINERS) MUST
+NEVER create or rewrite the profile. There is no trust-on-first-use
+pinning at runtime.
+
+Provisioning procedure: observe `lstat` of each profiled ancestor;
+reject symlinks and `(mode & 0022) != 0`; when the observed owner is
+non-root, additionally verify (see 30.6) that the covering mount of
+`/usr` is read-only; build the canonical document from observed values;
+write to an `O_EXCL` temporary file in the same directory, `fchown 0:0`,
+`fchmod 0640`, `fsync`; `rename` onto the final name; `fsync` the
+parent directory; re-read and byte-verify. If a valid profile already
+exists and the observed values are identical, provisioning is an
+idempotent no-op. If a valid profile exists and observed values differ,
+`initialize` fails; replacement requires an explicit host-admin
+`rebind` (or `recover` where trust state permits).
+
+### 30.5 Runtime platform-ancestor checks
+
+For each platform-profiled ancestor the adapter requires, on every
+invocation:
+
+- `lstat` succeeds; `S_ISDIR`; not `S_ISLNK`;
+- `st_uid`/`st_gid` equal the profile values for that exact path
+  (ownership drift is terminal);
+- `(st_mode & 0022) == 0`;
+- `open` with `O_RDONLY|O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC` succeeds;
+- lstat/fstat/lstat device+inode continuity within the invocation.
+
+Inode/device identity is never persisted; it is a per-invocation TOCTOU
+defense only, so platform refreshes, sysext refreshes, and reboots that
+legitimately change device/inode identity are accepted as long as the
+ownership profile still matches.
+
+### 30.6 Conditional read-only mount proof
+
+When the profiled owner of `/usr/bin` or `/usr/lib` is not `0:0`, the
+adapter MUST prove, on the same invocation, that `/usr` is covered by a
+read-only mount, using the existing `/proc/1/mountinfo` parsing
+semantics (`read_prepared_mount`/`mount_option`): locate the covering
+mount with the longest matching prefix, require exactly one match, and
+require option `ro` present and `rw` absent. When the profiled owner is
+`0:0` (generic Linux), this check is not required and a writable root
+filesystem is acceptable, because the non-root write threat the check
+addresses does not apply to a root-owned ancestor.
+
+### 30.7 Profile availability ordering
+
+The platform ownership profile resides on the authority-trust mount;
+the first lifecycle unit is `zima-control-runtime-stopped-check.service`.
+That unit therefore declares:
+
+```ini
+Requires=var-lib-authority\x2dtrust.mount
+After=var-lib-authority\x2dtrust.mount
+```
+
+guaranteeing `trust mount active → profile readable → stopped-check →
+bootstrap` without introducing a dependency cycle.
+
+### 30.8 Security rationale
+
+The protected installation boundary trusts exactly what it installs.
+Everything beneath `/usr/lib/zima-control-center` remains strictly
+root-owned; `/`, `/usr`, `/usr/bin/docker`, and all ZCC files keep
+their existing strict validation unchanged. Only `/usr/bin` and
+`/usr/lib` move to profile-based ownership because on the target
+platform they are owned by the read-only platform layer (buildroot
+uid), which the adapter cannot and must not modify. Profiled
+ownership is one of several conjunctive controls: non-group/other
+writable mode, directory type, no symlink, per-invocation continuity,
+and — for non-root owners — the read-only mount proof together prevent
+any non-root write path to the traversed ancestors. Ownership drift
+against the pinned profile fails closed.
 
 SPECIFICATION FREEZE COMPLETE

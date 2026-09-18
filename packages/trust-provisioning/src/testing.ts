@@ -11,6 +11,7 @@ export function createTestTrustFilesystem(root: string, uid: number, gid: number
       keyDirectory: join(base, "var/lib/authority-trust/issuer/keys"), stagingDirectory: join(base, "var/lib/authority-trust/staging"),
       quarantineDirectory: join(base, "var/lib/authority-trust/quarantine"), runDirectory: join(base, "run/authority-trust"),
       lockFile: join(base, "run/authority-trust/provision.lock"),
+      platformOwnershipProfile: join(base, "var/lib/authority-trust/platform-ownership-profile.json"),
     },
   });
 }

@@ -17,4 +17,7 @@ export const productionTrustPaths = Object.freeze({
   quarantineDirectory: "/var/lib/authority-trust/quarantine",
   runDirectory: "/run/authority-trust",
   lockFile: "/run/authority-trust/provision.lock",
+  platformOwnershipProfile: "/var/lib/authority-trust/platform-ownership-profile.json",
 });
+
+export const PLATFORM_OWNERSHIP_PROFILE_PATHS = Object.freeze(["/usr/bin", "/usr/lib"] as const);

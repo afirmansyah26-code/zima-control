@@ -1,7 +1,7 @@
 [Unit]
 Description=Confirm Zima Control Center runtimes are stopped
-Requires=docker.service
-After=docker.service
+Requires=docker.service var-lib-authority\x2dtrust.mount
+After=docker.service var-lib-authority\x2dtrust.mount
 Before=zima-control-runtime-bootstrap.service
 PartOf=zima-control-runtime-bootstrap.service
 
