@@ -443,6 +443,58 @@ static int drop_capture_capabilities(void) {
   return 0;
 }
 
+static int clear_effective_permitted_capabilities(void) {
+  struct __user_cap_header_struct header;
+  struct __user_cap_data_struct data[2];
+  memset(&header, 0, sizeof(header));
+  memset(data, 0, sizeof(data));
+  header.version = _LINUX_CAPABILITY_VERSION_3;
+  if (syscall(SYS_capget, &header, data) != 0) return -1;
+  data[0].effective = 0U; data[0].permitted = 0U; data[0].inheritable = 0U;
+  data[1].effective = 0U; data[1].permitted = 0U; data[1].inheritable = 0U;
+  if (syscall(SYS_capset, &header, data) != 0) return -1;
+  return 0;
+}
+
+/* Returns 0 when the bounding set is empty, 1 when it is exactly
+ * {CAP_SYS_PTRACE, CAP_SETPCAP}, and -1 for any other state. */
+static int bounding_capture_state(void) {
+  int capability;
+  int ptr = -1;
+  int spc = -1;
+  int others = 0;
+  for (capability = 0; capability <= CAP_LAST_CAP; capability += 1) {
+    int present = prctl(PR_CAPBSET_READ, capability, 0L, 0L, 0L);
+    if (present < 0) return -1;
+    if (capability == CAP_SYS_PTRACE) { ptr = present; continue; }
+    if (capability == CAP_SETPCAP) { spc = present; continue; }
+    if (present != 0) others += 1;
+  }
+  if (others != 0) return -1;
+  if (ptr == 0 && spc == 0) return 0;
+  if (ptr == 1 && spc == 1) return 1;
+  return -1;
+}
+
+static int transition_non_start_capabilities(void) {
+  struct __user_cap_header_struct header;
+  struct __user_cap_data_struct data[2];
+  int state;
+  if (normalize_inheritable_capabilities() != 0) return -1;
+  state = bounding_capture_state();
+  if (state < 0) return -1;
+  if (state == 1) {
+    memset(&header, 0, sizeof(header));
+    memset(data, 0, sizeof(data));
+    header.version = _LINUX_CAPABILITY_VERSION_3;
+    if (syscall(SYS_capget, &header, data) != 0) return -1;
+    if ((data[0].effective & (1U << CAP_SETPCAP)) == 0U) return -1;
+    if (prctl(PR_CAPBSET_DROP, CAP_SYS_PTRACE, 0L, 0L, 0L) != 0) return -1;
+    if (prctl(PR_CAPBSET_DROP, CAP_SETPCAP, 0L, 0L, 0L) != 0) return -1;
+  }
+  return clear_effective_permitted_capabilities();
+}
+
 static int full_write(int fd, const char *bytes, size_t length) {
   size_t offset = 0U;
   while (offset < length) {
@@ -1022,8 +1074,7 @@ int main(int argc, char **argv) {
       goto finish;
     }
   } else {
-    if (normalize_inheritable_capabilities() != 0
-        || drop_capture_capabilities() != 0
+    if (transition_non_start_capabilities() != 0
         || exact_zero_capabilities() != 0) {
       result = 68;
       error_code = "INVALID_INSTALLATION";

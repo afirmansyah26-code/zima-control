@@ -255,10 +255,19 @@ adapter's capability handling is **verb-scoped**:
   bounding set and reduces effective/permitted/bounding to empty, verifying the
   exact zero-capability Phase 2 before any Docker/lifecycle execution.
 - **Non-START verbs** (`STOP_*`, `STATUS_*`, `REMOVE_RUNTIME_CONTAINERS`): the
-  adapter MUST immediately normalize inheritable and remove all
-  effective/permitted capabilities available from the unit and verify the exact
-  zero-capability state before any filesystem, `/proc/1/root`, PID 1 namespace,
-  Docker, DB, prepared-source, mount, or lifecycle operation.
+  execution unit may begin in either of exactly two legitimate bounding states:
+  an already-empty bounding set (the zero-capability `stopped-check` and
+  `uninstall` units), or the START-capability bounding set inherited from an
+  authority/issuer lifecycle unit, i.e. exactly `{CAP_SYS_PTRACE, CAP_SETPCAP}`.
+  Any other initial bounding state is terminal. When the capture bounding set is
+  present, the adapter MUST retain `CAP_SETPCAP` effective long enough to
+  irreversibly drop `CAP_SYS_PTRACE` and `CAP_SETPCAP` from the bounding set
+  before clearing its effective/permitted sets; when the bounding set is already
+  empty, no bounding-set drop is attempted. In either case the adapter MUST
+  normalize inheritable, clear effective/permitted, and verify the exact
+  zero-capability state (including an empty bounding set) before any filesystem,
+  `/proc/1/root`, PID 1 namespace, Docker, DB, prepared-source, mount, or
+  lifecycle operation.
 
 Unit-level `CapabilityBoundingSet` cannot itself differentiate START from
 non-START verbs when they share one systemd unit; therefore the verb-scoped

@@ -259,10 +259,84 @@ test("lifecycle adapter applies a verb-scoped capability transition", async () =
   assert.ok(preparedIndex >= 0 && dropIndex > preparedIndex,
     "DROP_MUST_FOLLOW_PREPARED_SOURCE_VALIDATION");
   assert.ok(dockerIndex > dropIndex, "DROP_MUST_PRECEDE_DOCKER_OPERATION");
+  // NON-START verbs run in one of two legitimate unit states: zero-capability
+  // units (stopped-check, uninstall) or the authority/issuer capture-bounding
+  // state. The transition must conditionally drop the bounding capture set and
+  // must never clear effective/permitted before that drop.
+  assert.match(source, /static int transition_non_start_capabilities/);
+  assert.match(source, /static int bounding_capture_state/);
+  const nonStart = source.slice(source.indexOf("static int transition_non_start_capabilities"),
+    source.indexOf("static int full_write"));
+  // fail-closed on unexpected bounding states
+  assert.match(nonStart, /if \(state < 0\) return -1;/);
+  // conditional drop only when capture bounding is present
+  assert.match(nonStart, /if \(state == 1\) \{/);
+  assert.match(nonStart, /\(data\[0\]\.effective & \(1U << CAP_SETPCAP\)\) == 0U\) return -1;/);
+  assert.match(nonStart, /PR_CAPBSET_DROP, CAP_SYS_PTRACE/);
+  assert.match(nonStart, /PR_CAPBSET_DROP, CAP_SETPCAP/);
+  // effective/permitted clearing must happen after the drops
+  const dropIdx = nonStart.indexOf("PR_CAPBSET_DROP, CAP_SETPCAP");
+  const clearIdx = nonStart.indexOf("return clear_effective_permitted_capabilities();");
+  assert.ok(clearIdx > dropIdx, "NON_START_CLEAR_MUST_FOLLOW_BOUNDING_DROPS");
+  // bounding_capture_state rejects unrelated capabilities and half-states
+  const stateHelper = source.slice(source.indexOf("static int bounding_capture_state"),
+    source.indexOf("static int transition_non_start_capabilities"));
+  assert.match(stateHelper, /if \(others != 0\) return -1;/);
+  assert.match(stateHelper, /if \(ptr == 0 && spc == 0\) return 0;/);
+  assert.match(stateHelper, /if \(ptr == 1 && spc == 1\) return 1;/);
+  assert.match(stateHelper, /return -1;/);
+  // The non-START branch uses the conditional transition helper.
+  assert.match(source, /transition_non_start_capabilities\(\) != 0/);
+
   // Verb classification must gate the capability branch.
   assert.match(source, /audit_contract->kind == OP_START_AUTHORITY \|\| audit_contract->kind == OP_START_ISSUER/);
   // No CAP_SYS_ADMIN in the adapter capture set.
   assert.doesNotMatch(source, /CAPTURE_CAPABILITIES[\s\S]{0,120}CAP_SYS_ADMIN/);
+
+  // NON-START verbs run in one of two legitimate unit states (zero-capability
+  // stopped-check/uninstall, or authority/issuer capture-bounding). The branch
+  // uses the conditional transition helper, never the START drop helper.
+  const nonStartBranch = source.slice(source.indexOf("} else {\n    if (transition_non_start_capabilities()"),
+    source.indexOf("if (validate_directory(\"/run\""));
+  assert.match(nonStartBranch, /transition_non_start_capabilities\(\) != 0/);
+  assert.doesNotMatch(nonStartBranch, /drop_capture_capabilities/);
+  const clearHelper = source.slice(source.indexOf("static int clear_effective_permitted_capabilities"),
+    source.indexOf("static int clear_effective_permitted_capabilities") + 700);
+  assert.doesNotMatch(clearHelper, /PR_CAPBSET_DROP/);
+  // exact_zero_capabilities must keep the strict bounding check.
+  const zeroHelper = source.slice(source.indexOf("static int exact_zero_capabilities"),
+    source.indexOf("static int drop_capture_capabilities"));
+  assert.match(zeroHelper, /PR_CAPBSET_READ, CAP_SYS_PTRACE/);
+  assert.match(zeroHelper, /PR_CAPBSET_READ, CAP_SETPCAP/);
+  // START transition must still perform both irreversible bounding drops.
+  const startDrop = source.slice(source.indexOf("static int drop_capture_capabilities"),
+    source.indexOf("static int clear_effective_permitted_capabilities"));
+  assert.match(startDrop, /PR_CAPBSET_DROP, CAP_SYS_PTRACE/);
+  assert.match(startDrop, /PR_CAPBSET_DROP, CAP_SETPCAP/);
+});
+
+test("R1 end-of-invocation proof compares against captured PID1 identity without PTRACE", async () => {
+  const bootstrap = await read("native/host-runtime/runtime-trust-bootstrap.c");
+  const readiness = await read("native/host-runtime/runtime-authority-readiness.c");
+  for (const source of [bootstrap, readiness]) {
+    // capture stores the PID1 namespace identity
+    assert.match(source, /\*identity = host_namespace;/);
+    // end check reads only the self namespace and compares to captured identity
+    const endCheck = source.slice(source.indexOf("static int host_mount_namespace_unchanged"));
+    assert.match(endCheck, /stat\("\/proc\/self\/ns\/mnt", &current\)/);
+    assert.match(endCheck, /current\.st_dev == identity->st_dev && current\.st_ino == identity->st_ino/);
+    // the end check must not dereference the PID1 namespace
+    const endBody = endCheck.slice(0, endCheck.indexOf("}"));
+    assert.doesNotMatch(endBody, /proc\/1\/ns\/mnt/);
+  }
+  // readiness end check is gated to mount verbs only
+  assert.match(readiness, /if \(mount_verb != 0 && host_mount_namespace_unchanged\(&mount_namespace\) != 0\) result = 80;/);
+  // sandbox still forbids namespace-changing syscalls
+  const bootstrapUnit = await read("deployment/systemd/zima-control-runtime-bootstrap.service");
+  const readinessUnit = await read("deployment/systemd/zima-control-runtime-readiness-mount.service");
+  for (const unit of [bootstrapUnit, readinessUnit]) {
+    assert.match(unit, /SystemCallFilter=~setns unshare pivot_root/);
+  }
 });
 
 test("lifecycle helper surface is fixed and has no shell or caller-controlled target", async () => {
