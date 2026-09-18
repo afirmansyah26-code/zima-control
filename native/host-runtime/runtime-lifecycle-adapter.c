@@ -308,7 +308,8 @@ static int covering_mount_is_ro(const char *path) {
   char line[4096];
   size_t best_length = 0U;
   int best_ro = -1;
-  int covering = 0;
+  int best_count = 0;
+  int malformed = 0;
   if (file == NULL) return -1;
   while (fgets(line, (int)sizeof(line), file) != NULL) {
     unsigned long mount_id;
@@ -317,24 +318,27 @@ static int covering_mount_is_ro(const char *path) {
     char mount_point[PATH_MAX];
     char options[1024];
     size_t mount_point_length;
-    if (strchr(line, '\n') == NULL && feof(file) == 0) { covering = -1; break; }
+    if (strchr(line, '\n') == NULL && feof(file) == 0) { malformed = 1; break; }
     if (sscanf(line, "%lu %*s %u:%u %*s %4095s %1023s",
         &mount_id, &device_major, &device_minor, mount_point, options) == 5
         && mount_id > 0UL) {
       mount_point_length = strlen(mount_point);
       if (mount_point_length <= strlen(path)
-          && strncmp(mount_point, path, mount_point_length) == 0
-          && mount_point_length > best_length) {
-        best_length = mount_point_length;
-        best_ro = (mount_option(options, "ro") != 0
-          && mount_option(options, "rw") == 0) ? 1 : 0;
-        covering += 1;
+          && strncmp(mount_point, path, mount_point_length) == 0) {
+        if (mount_point_length > best_length) {
+          best_length = mount_point_length;
+          best_ro = (mount_option(options, "ro") != 0
+            && mount_option(options, "rw") == 0) ? 1 : 0;
+          best_count = 1;
+        } else if (mount_point_length == best_length) {
+          best_count += 1;
+        }
       }
     }
   }
-  if (ferror(file) != 0) covering = -1;
+  if (ferror(file) != 0) malformed = 1;
   (void)fclose(file);
-  if (covering != 1 || best_ro != 1) return -1;
+  if (malformed != 0 || best_count != 1 || best_ro != 1) return -1;
   return 0;
 }
 
