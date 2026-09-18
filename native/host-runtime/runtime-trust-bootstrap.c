@@ -902,8 +902,47 @@ static int capture_host_mount_namespace(struct stat *identity) {
       || self_namespace.st_dev != host_namespace.st_dev
       || self_namespace.st_ino != host_namespace.st_ino
       || self_namespace.st_dev == 0U || self_namespace.st_ino == 0U) return -1;
-  *identity = self_namespace;
+  *identity = host_namespace;
   return 0;
+}
+
+#define CAPTURE_CAPABILITIES ((1U << CAP_CHOWN) | (1U << CAP_DAC_OVERRIDE) \
+  | (1U << CAP_FOWNER) | (1U << CAP_SYS_ADMIN) | (1U << CAP_SYS_PTRACE) | (1U << CAP_SETPCAP))
+#define OPERATION_CAPABILITIES ((1U << CAP_CHOWN) | (1U << CAP_DAC_OVERRIDE) \
+  | (1U << CAP_FOWNER) | (1U << CAP_SYS_ADMIN))
+
+static int ambient_capabilities_absent(void) {
+  int capability;
+  for (capability = 0; capability <= CAP_LAST_CAP; capability += 1) {
+    if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, capability, 0L, 0L) != 0) return -1;
+  }
+  return 0;
+}
+
+static int normalize_inheritable_capabilities(void) {
+  struct __user_cap_header_struct header;
+  struct __user_cap_data_struct data[2];
+  memset(&header, 0, sizeof(header));
+  memset(data, 0, sizeof(data));
+  header.version = _LINUX_CAPABILITY_VERSION_3;
+  if (syscall(SYS_capget, &header, data) != 0) return -1;
+  data[0].inheritable = 0U;
+  data[1].inheritable = 0U;
+  if (syscall(SYS_capset, &header, data) != 0) return -1;
+  return 0;
+}
+
+static int exact_capture_capabilities(void) {
+  struct __user_cap_header_struct header;
+  struct __user_cap_data_struct data[2];
+  memset(&header, 0, sizeof(header));
+  memset(data, 0, sizeof(data));
+  header.version = _LINUX_CAPABILITY_VERSION_3;
+  if (syscall(SYS_capget, &header, data) != 0
+      || data[0].effective != CAPTURE_CAPABILITIES || data[0].permitted != CAPTURE_CAPABILITIES
+      || data[0].inheritable != 0U || data[1].effective != 0U
+      || data[1].permitted != 0U || data[1].inheritable != 0U) return -1;
+  return ambient_capabilities_absent();
 }
 
 static int exact_mount_capabilities(void) {
@@ -925,9 +964,35 @@ static int exact_mount_capabilities(void) {
   return 0;
 }
 
+static int exact_operation_capabilities(void) {
+  if (exact_mount_capabilities() != 0) return -1;
+  if (prctl(PR_CAPBSET_READ, CAP_SYS_PTRACE, 0L, 0L, 0L) != 0) return -1;
+  if (prctl(PR_CAPBSET_READ, CAP_SETPCAP, 0L, 0L, 0L) != 0) return -1;
+  return 0;
+}
+
+static int drop_capture_capabilities(void) {
+  struct __user_cap_header_struct header;
+  struct __user_cap_data_struct data[2];
+  if (prctl(PR_CAPBSET_DROP, CAP_SYS_PTRACE, 0L, 0L, 0L) != 0) return -1;
+  if (prctl(PR_CAPBSET_DROP, CAP_SETPCAP, 0L, 0L, 0L) != 0) return -1;
+  memset(&header, 0, sizeof(header));
+  memset(data, 0, sizeof(data));
+  header.version = _LINUX_CAPABILITY_VERSION_3;
+  if (syscall(SYS_capget, &header, data) != 0) return -1;
+  data[0].effective = OPERATION_CAPABILITIES;
+  data[0].permitted = OPERATION_CAPABILITIES;
+  data[0].inheritable = 0U;
+  data[1].effective = 0U;
+  data[1].permitted = 0U;
+  data[1].inheritable = 0U;
+  if (syscall(SYS_capset, &header, data) != 0) return -1;
+  return 0;
+}
+
 static int host_mount_namespace_unchanged(const struct stat *identity) {
   struct stat current;
-  return capture_host_mount_namespace(&current) == 0
+  return stat("/proc/self/ns/mnt", &current) == 0
     && current.st_dev == identity->st_dev && current.st_ino == identity->st_ino ? 0 : -1;
 }
 
@@ -937,8 +1002,11 @@ int main(int argc, char **argv) {
   struct stat mount_namespace;
   if (argc != 2 || (strcmp(argv[1], "PREPARE") != 0 && strcmp(argv[1], "CLEANUP") != 0)
       || getuid() != 0U || geteuid() != 0U || systemd_context() != 0
-      || exact_mount_capabilities() != 0
-      || capture_host_mount_namespace(&mount_namespace) != 0) return 64;
+      || normalize_inheritable_capabilities() != 0
+      || exact_capture_capabilities() != 0
+      || capture_host_mount_namespace(&mount_namespace) != 0
+      || drop_capture_capabilities() != 0
+      || exact_operation_capabilities() != 0) return 64;
   if (clearenv() != 0 || chdir("/") != 0) return 65;
   (void)umask((mode_t)0077);
   lock_fd = ensure_control_directory();

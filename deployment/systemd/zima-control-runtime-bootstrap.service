@@ -20,7 +20,7 @@ NoNewPrivileges=yes
 RestrictSUIDSGID=yes
 RestrictAddressFamilies=AF_UNIX
 IPAddressDeny=any
-CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_SYS_PTRACE CAP_SETPCAP
 AmbientCapabilities=
 SystemCallFilter=~setns unshare pivot_root
 

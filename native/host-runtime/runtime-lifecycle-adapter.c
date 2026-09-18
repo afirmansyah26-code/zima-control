@@ -2,15 +2,19 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#include <linux/capability.h>
 #include <openssl/crypto.h>
 #include <openssl/sha.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
+#include <sys/syscall.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <syslog.h>
@@ -369,6 +373,73 @@ static int validate_platform_ancestors(void) {
         profile.usr_bin_non_root) != 0) return -1;
   if (validate_platform_directory("/usr/lib", &profile.usr_lib,
         profile.usr_lib_non_root) != 0) return -1;
+  return 0;
+}
+
+/* ---- Amendment 2C-13.3-A1 / protected-mount capability contract ---- */
+
+#define CAPTURE_CAPABILITIES ((1U << CAP_SYS_PTRACE) | (1U << CAP_SETPCAP))
+
+static int ambient_capabilities_absent(void) {
+  int capability;
+  for (capability = 0; capability <= CAP_LAST_CAP; capability += 1) {
+    if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, capability, 0L, 0L) != 0) return -1;
+  }
+  return 0;
+}
+
+static int normalize_inheritable_capabilities(void) {
+  struct __user_cap_header_struct header;
+  struct __user_cap_data_struct data[2];
+  memset(&header, 0, sizeof(header));
+  memset(data, 0, sizeof(data));
+  header.version = _LINUX_CAPABILITY_VERSION_3;
+  if (syscall(SYS_capget, &header, data) != 0) return -1;
+  data[0].inheritable = 0U;
+  data[1].inheritable = 0U;
+  if (syscall(SYS_capset, &header, data) != 0) return -1;
+  return 0;
+}
+
+static int exact_capture_capabilities(void) {
+  struct __user_cap_header_struct header;
+  struct __user_cap_data_struct data[2];
+  memset(&header, 0, sizeof(header));
+  memset(data, 0, sizeof(data));
+  header.version = _LINUX_CAPABILITY_VERSION_3;
+  if (syscall(SYS_capget, &header, data) != 0
+      || data[0].effective != CAPTURE_CAPABILITIES || data[0].permitted != CAPTURE_CAPABILITIES
+      || data[0].inheritable != 0U || data[1].effective != 0U
+      || data[1].permitted != 0U || data[1].inheritable != 0U) return -1;
+  return ambient_capabilities_absent();
+}
+
+static int exact_zero_capabilities(void) {
+  struct __user_cap_header_struct header;
+  struct __user_cap_data_struct data[2];
+  memset(&header, 0, sizeof(header));
+  memset(data, 0, sizeof(data));
+  header.version = _LINUX_CAPABILITY_VERSION_3;
+  if (syscall(SYS_capget, &header, data) != 0
+      || data[0].effective != 0U || data[0].permitted != 0U || data[0].inheritable != 0U
+      || data[1].effective != 0U || data[1].permitted != 0U || data[1].inheritable != 0U) return -1;
+  if (prctl(PR_CAPBSET_READ, CAP_SYS_PTRACE, 0L, 0L, 0L) != 0) return -1;
+  if (prctl(PR_CAPBSET_READ, CAP_SETPCAP, 0L, 0L, 0L) != 0) return -1;
+  return ambient_capabilities_absent();
+}
+
+static int drop_capture_capabilities(void) {
+  struct __user_cap_header_struct header;
+  struct __user_cap_data_struct data[2];
+  if (prctl(PR_CAPBSET_DROP, CAP_SYS_PTRACE, 0L, 0L, 0L) != 0) return -1;
+  if (prctl(PR_CAPBSET_DROP, CAP_SETPCAP, 0L, 0L, 0L) != 0) return -1;
+  memset(&header, 0, sizeof(header));
+  memset(data, 0, sizeof(data));
+  header.version = _LINUX_CAPABILITY_VERSION_3;
+  if (syscall(SYS_capget, &header, data) != 0) return -1;
+  data[0].effective = 0U; data[0].permitted = 0U; data[0].inheritable = 0U;
+  data[1].effective = 0U; data[1].permitted = 0U; data[1].inheritable = 0U;
+  if (syscall(SYS_capset, &header, data) != 0) return -1;
   return 0;
 }
 
@@ -943,6 +1014,22 @@ int main(int argc, char **argv) {
     error_code = "INVALID_INSTALLATION";
     goto finish;
   }
+  if (audit_contract->kind == OP_START_AUTHORITY || audit_contract->kind == OP_START_ISSUER) {
+    if (normalize_inheritable_capabilities() != 0
+        || exact_capture_capabilities() != 0) {
+      result = 68;
+      error_code = "INVALID_INSTALLATION";
+      goto finish;
+    }
+  } else {
+    if (normalize_inheritable_capabilities() != 0
+        || drop_capture_capabilities() != 0
+        || exact_zero_capabilities() != 0) {
+      result = 68;
+      error_code = "INVALID_INSTALLATION";
+      goto finish;
+    }
+  }
   if (validate_directory("/run", (mode_t)0022) != 0
       || validate_directory("/run/authority-runtime-bootstrap", (mode_t)0077) != 0
       || lstat("/run/authority-runtime-bootstrap", &lock_parent) != 0
@@ -996,6 +1083,20 @@ int main(int argc, char **argv) {
     error_code = "INVALID_INSTALLATION";
     goto finish;
   }
+  if (audit_contract->kind == OP_START_AUTHORITY) prepared_role = 1;
+  else if (audit_contract->kind == OP_START_ISSUER) prepared_role = 0;
+  if (prepared_role >= 0) {
+    if (validate_prepared_sources(prepared_role, issuer_gid) != 0) {
+      result = 68;
+      error_code = "INVALID_INSTALLATION";
+      goto finish;
+    }
+    if (drop_capture_capabilities() != 0 || exact_zero_capabilities() != 0) {
+      result = 68;
+      error_code = "INVALID_INSTALLATION";
+      goto finish;
+    }
+  }
   compose_cli_result = validate_compose_cli();
   if (compose_cli_result != 0) {
     result = compose_cli_result == RESULT_TIMEOUT || compose_cli_result == RESULT_ENGINE_UNAVAILABLE
@@ -1007,7 +1108,6 @@ int main(int argc, char **argv) {
   }
 
   if (audit_contract->kind == OP_START_AUTHORITY) {
-    prepared_role = 1;
     (void)unlink(AUTHORITY_STOPPED);
     command[index++] = (char *)"up"; command[index++] = (char *)"--no-deps";
     command[index++] = (char *)"--no-build"; command[index++] = (char *)"--pull";
@@ -1017,7 +1117,6 @@ int main(int argc, char **argv) {
     command[index++] = (char *)"stop"; command[index++] = (char *)"--timeout";
     command[index++] = (char *)"20"; command[index++] = (char *)"authority";
   } else if (audit_contract->kind == OP_START_ISSUER) {
-    prepared_role = 0;
     (void)unlink(ISSUER_STOPPED);
     command[index++] = (char *)"up"; command[index++] = (char *)"--no-deps";
     command[index++] = (char *)"--no-build"; command[index++] = (char *)"--pull";
@@ -1045,11 +1144,6 @@ int main(int argc, char **argv) {
     goto finish;
   }
   command[index] = NULL;
-  if (prepared_role >= 0 && validate_prepared_sources(prepared_role, issuer_gid) != 0) {
-    result = 68;
-    error_code = "INVALID_INSTALLATION";
-    goto finish;
-  }
   if (attached != 0) {
     (void)flock(lock_fd, LOCK_UN);
     (void)close(lock_fd);

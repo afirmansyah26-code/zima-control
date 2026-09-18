@@ -168,10 +168,10 @@ test("lifecycle states distinguish pre-bootstrap stopped status from prepared st
   // PREPARED: only successful PREPARE can precede runtime START, whose fixed
   // role selects the complete PID-1 prepared-source verification.
   assert.match(bootstrap, /ExecStart=.*runtime-trust-bootstrap PREPARE/);
-  assert.match(adapter, /OP_START_AUTHORITY\) \{\s*prepared_role = 1;/s);
-  assert.match(adapter, /OP_START_ISSUER\) \{\s*prepared_role = 0;/s);
   assert.match(adapter,
-    /if \(prepared_role >= 0 && validate_prepared_sources\(prepared_role, issuer_gid\) != 0\)/);
+    /OP_START_AUTHORITY\) prepared_role = 1;\s*\n\s*else if \(audit_contract->kind == OP_START_ISSUER\) prepared_role = 0;/);
+  assert.match(adapter,
+    /if \(prepared_role >= 0\) \{\s*\n\s*if \(validate_prepared_sources\(prepared_role, issuer_gid\) != 0\)/);
 });
 
 test("parsed systemd relationships continuously recover Issuer without weakening Authority coupling", async () => {
@@ -200,15 +200,25 @@ test("only mount-changing units carry the exact frozen capability set and host n
   const readinessMount = await read("deployment/systemd/zima-control-runtime-readiness-mount.service");
   const authority = await read("deployment/systemd/zima-control-runtime-authority.service");
   const issuer = await read("deployment/systemd/zima-control-runtime-issuer.service");
-  const exact = "CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER";
+  const stoppedCheck = await read("deployment/systemd/zima-control-runtime-stopped-check.service");
+  const uninstall = await read("deployment/systemd/zima-control-runtime-uninstall.service");
+  const capture = "CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_SYS_PTRACE CAP_SETPCAP";
   for (const unit of [bootstrap, readinessMount]) {
-    assert.match(unit, new RegExp(exact));
+    assert.match(unit, new RegExp(capture));
     assert.match(unit, /^AmbientCapabilities=$/m);
     assert.doesNotMatch(unit, /PrivateTmp|PrivateDevices|ProtectSystem|ProtectHome|ReadOnlyPaths|ReadWritePaths|InaccessiblePaths|BindPaths|BindReadOnlyPaths/);
   }
+  // Adapter START units carry exactly the two capture capabilities; the adapter
+  // drops them verb-scoped before Docker/lifecycle execution.
   for (const unit of [authority, issuer]) {
-    assert.match(unit, /^CapabilityBoundingSet=$/m);
+    assert.match(unit, /^CapabilityBoundingSet=CAP_SYS_PTRACE CAP_SETPCAP$/m);
+    assert.match(unit, /^AmbientCapabilities=$/m);
     assert.match(unit, /SystemCallFilter=~@mount setns unshare pivot_root/);
+  }
+  // Non-START adapter units remain zero-capability.
+  for (const unit of [stoppedCheck, uninstall]) {
+    assert.match(unit, /^CapabilityBoundingSet=$/m);
+    assert.match(unit, /^AmbientCapabilities=$/m);
   }
   const bootstrapSource = await read("native/host-runtime/runtime-trust-bootstrap.c");
   const readinessSource = await read("native/host-runtime/runtime-authority-readiness.c");
@@ -216,11 +226,43 @@ test("only mount-changing units carry the exact frozen capability set and host n
     assert.match(source, /stat\("\/proc\/self\/ns\/mnt"/);
     assert.match(source, /stat\("\/proc\/1\/ns\/mnt"/);
     assert.match(source, /host_mount_namespace_unchanged/);
-    assert.match(source, /exact_mount_capabilities/);
+    assert.match(source, /exact_capture_capabilities/);
+    assert.match(source, /exact_operation_capabilities/);
+    assert.match(source, /drop_capture_capabilities/);
+    assert.match(source, /normalize_inheritable_capabilities/);
+    assert.match(source, /PR_CAPBSET_DROP, CAP_SYS_PTRACE/);
+    assert.match(source, /PR_CAPBSET_DROP, CAP_SETPCAP/);
+    assert.match(source, /PR_CAPBSET_READ, CAP_SYS_PTRACE/);
+    assert.match(source, /PR_CAPBSET_READ, CAP_SETPCAP/);
     assert.match(source, /_LINUX_CAPABILITY_VERSION_3/);
     assert.match(source, /PR_CAP_AMBIENT_IS_SET/);
     assert.doesNotMatch(source, /\b(setns|unshare)\s*\(/);
   }
+});
+
+test("lifecycle adapter applies a verb-scoped capability transition", async () => {
+  const source = await read("native/host-runtime/runtime-lifecycle-adapter.c");
+  // START verbs require the exact two-capability capture set, validate prepared
+  // sources, then drop to exact zero before Docker/lifecycle execution.
+  assert.match(source, /#define CAPTURE_CAPABILITIES \(\(1U << CAP_SYS_PTRACE\) \| \(1U << CAP_SETPCAP\)\)/);
+  assert.match(source, /exact_capture_capabilities/);
+  assert.match(source, /exact_zero_capabilities/);
+  assert.match(source, /drop_capture_capabilities/);
+  assert.match(source, /normalize_inheritable_capabilities/);
+  assert.match(source, /PR_CAPBSET_DROP, CAP_SYS_PTRACE/);
+  assert.match(source, /PR_CAPBSET_DROP, CAP_SETPCAP/);
+  assert.match(source, /stat\("\/proc\/1\/ns\/mnt"/);
+  // The drop must appear after prepared-source validation and before Docker run.
+  const dropIndex = source.indexOf("drop_capture_capabilities() != 0 || exact_zero_capabilities()");
+  const dockerIndex = source.indexOf("result = run_operation(command, attached, status_mode)");
+  const preparedIndex = source.indexOf("validate_prepared_sources(prepared_role, issuer_gid) != 0");
+  assert.ok(preparedIndex >= 0 && dropIndex > preparedIndex,
+    "DROP_MUST_FOLLOW_PREPARED_SOURCE_VALIDATION");
+  assert.ok(dockerIndex > dropIndex, "DROP_MUST_PRECEDE_DOCKER_OPERATION");
+  // Verb classification must gate the capability branch.
+  assert.match(source, /audit_contract->kind == OP_START_AUTHORITY \|\| audit_contract->kind == OP_START_ISSUER/);
+  // No CAP_SYS_ADMIN in the adapter capture set.
+  assert.doesNotMatch(source, /CAPTURE_CAPABILITIES[\s\S]{0,120}CAP_SYS_ADMIN/);
 });
 
 test("lifecycle helper surface is fixed and has no shell or caller-controlled target", async () => {

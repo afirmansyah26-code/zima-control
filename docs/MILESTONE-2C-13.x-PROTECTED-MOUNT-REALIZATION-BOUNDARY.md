@@ -100,10 +100,28 @@ owned by host systemd PID 1. Mount-changing helper processes MUST execute
 directly in that namespace. They MUST NOT use `setns()`, `unshare()`, a caller
 supplied namespace descriptor, or an arbitrary `/proc/<pid>/ns/mnt` path.
 
-At the beginning and end of every mount-changing invocation, the helper MUST
-compare the device/inode identity of `/proc/self/ns/mnt` with
-`/proc/1/ns/mnt`. Inequality, inability to inspect either identity, replacement,
-or ambiguity is terminal and permits no mount mutation or cleanup.
+At the beginning of every mount-changing invocation, the helper MUST compare
+the device/inode identity of `/proc/self/ns/mnt` with `/proc/1/ns/mnt`, and
+MUST capture the PID 1 namespace identity for the invocation. Inequality,
+inability to inspect either identity, replacement, or ambiguity is terminal and
+permits no mount mutation or cleanup.
+
+At the end of the invocation, after mount work, the helper MUST compare
+`/proc/self/ns/mnt` against the PID 1 namespace identity captured at the
+beginning of the same invocation. This end proof is required because on the
+validated target platform `/proc/1/ns/mnt` is `PTRACE_MODE_READ_FSCREDS`-gated
+and requires `CAP_SYS_PTRACE`, which the helper irreversibly drops before mount
+mutation (Section 6). The end proof therefore reuses the already-proven PID 1
+identity and a capability-free self-namespace continuity check. This is not a
+weaker equality check: the beginning proof establishes `self == PID1`, the end
+proof establishes `self_end == PID1` through the captured identity, and the
+helper is forbidden (below) from changing its own mount namespace during the
+invocation. Comparing only `self_start == self_end` is insufficient and is not
+permitted.
+
+Between the beginning and end namespace checks the helper MUST NOT change its
+own mount namespace. This invariant is enforced by the frozen syscall policy
+(`setns`, `unshare`, and `pivot_root` denied) in the units that run the helper.
 
 The supported Docker daemon MUST resolve bind sources from that same initial
 host mount namespace. A Docker daemon with a private or otherwise non-observing
@@ -141,21 +159,45 @@ retain the stronger filesystem namespace sandboxing frozen by 2C-13.3.
 
 ## 6. Capability Boundary
 
+### 6.0 Phase-scoped capture capabilities (target-platform amendment)
+
+On the validated target platform (ZimaOS), inspecting `/proc/1/ns/mnt` and
+dereferencing `/proc/1/root` are `PTRACE_MODE_READ_FSCREDS`-gated and require
+`CAP_SYS_PTRACE`. Irreversibly removing a capability from the bounding set
+(`PR_CAPBSET_DROP`) requires `CAP_SETPCAP` to be effective. The mount-changing
+helpers and the prepared-source-validating adapter verbs therefore use a
+two-phase capability model:
+
+- **Phase 1 (capture):** `CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER
+  CAP_SYS_PTRACE CAP_SETPCAP` effective/permitted/bounding, inheritable and
+  ambient empty. Used only to inspect PID 1 namespace/host state and to perform
+  the bounding-set drops.
+- **Phase 2 (operation):** `CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER`
+  effective/permitted/bounding, inheritable and ambient empty. `CAP_SYS_PTRACE`
+  and `CAP_SETPCAP` are irreversibly removed from the bounding set.
+
+`CAP_SETPCAP` is not granted for general capability management; it exists solely
+because `PR_CAPBSET_DROP` requires it. Failure to normalize inheritable, to
+verify either phase exactly, or to perform either bounding-set drop is terminal.
+No mount mutation may occur before Phase 2 is verified.
+
 ### 6.1 Mount-capable bootstrap phase
 
 The fixed `runtime-trust-bootstrap PREPARE|CLEANUP` process runs as `0:0` in its
-own dedicated oneshot systemd execution boundary. Its effective, permitted, and
-bounding capability set is exactly:
+own dedicated oneshot systemd execution boundary. Its unit bounding set is the
+Phase 1 six-capability set above. Within the process the sequence is exactly:
 
-```text
-CAP_SYS_ADMIN
-CAP_DAC_OVERRIDE
-CAP_CHOWN
-CAP_FOWNER
-```
+1. normalize the inheritable set to zero;
+2. verify the exact Phase 1 capability state;
+3. capture the PID 1 mount-namespace identity (Section 5.1);
+4. drop `CAP_SYS_PTRACE` and `CAP_SETPCAP` from the bounding set;
+5. reduce effective/permitted to the exact four-capability set and verify the
+   exact Phase 2 state;
+6. only then perform mount PREPARE/CLEANUP;
+7. verify the end-of-invocation self-namespace continuity against the captured
+   PID 1 identity.
 
-Its ambient and inheritable capability sets are empty. It may use these
-capabilities only to:
+In Phase 2 it may use the four capabilities only to:
 
 - inspect protected ancestors and fixed host nodes;
 - create/chown/chmod the fixed ephemeral bootstrap and UDS nodes;
@@ -173,11 +215,14 @@ capabilities only to:
 ### 6.2 Mount-capable readiness phase
 
 The fixed `runtime-authority-readiness PREPARE|CLEANUP` process also runs as
-`0:0`, but in a distinct dedicated oneshot systemd execution boundary. Its
-effective, permitted, and bounding capability set is the same exact four-item
-set above; ambient and inheritable sets are empty.
+`0:0`, but in a distinct dedicated oneshot systemd execution boundary. It uses
+the identical two-phase model: Phase 1 six-capability capture, then the exact
+four-capability Phase 2, with `CAP_SYS_PTRACE` and `CAP_SETPCAP` irreversibly
+removed from the bounding set before readiness/mount work. Ambient and
+inheritable sets are empty in both phases. The `WAIT` verb is not mount-capable
+and executes with no capture capabilities.
 
-It may use those capabilities only to:
+In Phase 2 it may use those capabilities only to:
 
 - create, own, mode, validate, mount, remount, unmount, and remove the exact
   readiness epoch and state nodes in section 8;
@@ -196,6 +241,29 @@ receive `CAP_SYS_ADMIN` or any other mount-management capability. Their syscall
 policy MUST deny at least `mount`, `umount`, `umount2`, `fsopen`, `fsconfig`,
 `fsmount`, `move_mount`, `open_tree`, `mount_setattr`, `pivot_root`, `setns`, and
 mount-namespace `unshare`/`clone` operations.
+
+The lifecycle adapter intentionally runs in a private mount namespace and
+accesses host-visible prepared sources through `/proc/1/root`. Because those
+START verbs must validate prepared sources against the PID 1 namespace, the
+adapter's capability handling is **verb-scoped**:
+
+- **START verbs** (`START_AUTHORITY`, `START_ISSUER`): the invoking units grant
+  exactly `CAP_SYS_PTRACE CAP_SETPCAP` (effective/permitted/bounding, inheritable
+  and ambient empty). The adapter normalizes inheritable, verifies the exact
+  two-capability Phase 1, performs PID 1 namespace and `/proc/1/root`
+  prepared-source validation, then irreversibly drops both capabilities from the
+  bounding set and reduces effective/permitted/bounding to empty, verifying the
+  exact zero-capability Phase 2 before any Docker/lifecycle execution.
+- **Non-START verbs** (`STOP_*`, `STATUS_*`, `REMOVE_RUNTIME_CONTAINERS`): the
+  adapter MUST immediately normalize inheritable and remove all
+  effective/permitted capabilities available from the unit and verify the exact
+  zero-capability state before any filesystem, `/proc/1/root`, PID 1 namespace,
+  Docker, DB, prepared-source, mount, or lifecycle operation.
+
+Unit-level `CapabilityBoundingSet` cannot itself differentiate START from
+non-START verbs when they share one systemd unit; therefore the verb-scoped
+transition inside the adapter is normative. The systemd unit does not provide
+true per-verb capability isolation.
 
 Authority and Issuer remain non-root and `cap_drop: ALL`. Neither runtime may
 remount a deficient path. Verification failure always fails closed.
@@ -533,7 +601,7 @@ does not permit a source change that weakens this freeze.
 - **MNT-01:** Protected mounts exist in the Docker-visible host mount namespace.
 - **MNT-02:** A transient private systemd mount is never accepted as a prepared
   protected source.
-- **MNT-03:** Only fixed mount PREPARE/CLEANUP phases receive `CAP_SYS_ADMIN`.
+- **MNT-03:** Only fixed mount PREPARE/CLEANUP phases and the adapter START verbs receive the phase-scoped capture capabilities; `CAP_SYS_PTRACE` and `CAP_SETPCAP` are irreversibly removed from the bounding set before any mount or Docker/lifecycle mutation.
 - **MNT-04:** Lifecycle adapter, runtimes, provisioner, and applications have no
   mount-management capability.
 - **MNT-05:** No caller controls namespace, source, target, filesystem, or flags.
