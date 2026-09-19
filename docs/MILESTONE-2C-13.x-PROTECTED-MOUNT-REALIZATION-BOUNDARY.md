@@ -212,6 +212,19 @@ In Phase 2 it may use the four capabilities only to:
 - remove only the exact validated ephemeral nodes permitted by 2C-13.1 and
   2C-13.3.
 
+### 6.1.1 Bootstrap SGID exception
+
+The bootstrap unit sets `RestrictSUIDSGID=no` because `prepare_uds()` creates the
+protected UDS directory with mode `02750` (setgid). The SGID bit ensures files
+created in the UDS directory inherit group `zcc-trust-ipc` (21013), which is
+validated by both `cleanup_runtime()` and the lifecycle adapter's
+`validate_prepared_mount()`.
+
+This exception is scoped exclusively to the bootstrap unit. `NoNewPrivileges=yes`
+and all other sandbox restrictions remain active. The bootstrap's write surface is
+unchanged — it already has `CAP_DAC_OVERRIDE` and `CAP_SYS_ADMIN` with no
+`ProtectSystem` or `ReadWritePaths` restrictions.
+
 ### 6.2 Mount-capable readiness phase
 
 The fixed `runtime-authority-readiness PREPARE|CLEANUP` process also runs as

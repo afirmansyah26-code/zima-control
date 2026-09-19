@@ -271,6 +271,32 @@ test("only mount-changing units carry the exact frozen capability set and host n
   }
 });
 
+test("bootstrap allows SGID creation for prepare_uds while retaining all other sandbox directives", async () => {
+  const bootstrap = await read("deployment/systemd/zima-control-runtime-bootstrap.service");
+  // prepare_uds() creates the UDS directory with mode 02750 (setgid) so files
+  // created in it inherit group zcc-trust-ipc (21013). RestrictSUIDSGID=yes
+  // blocks mkdir/chmod with the setgid bit, causing prepare_uds to fail with
+  // EPERM. This exception is scoped exclusively to the bootstrap unit.
+  assert.match(bootstrap, /^RestrictSUIDSGID=no$/m);
+  // All other frozen sandbox directives remain unchanged.
+  assert.match(bootstrap, /^NoNewPrivileges=yes$/m);
+  assert.match(bootstrap, /^CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_SYS_PTRACE CAP_SETPCAP$/m);
+  assert.match(bootstrap, /^AmbientCapabilities=$/m);
+  assert.match(bootstrap, /^SystemCallFilter=~setns unshare pivot_root$/m);
+  assert.match(bootstrap, /^RestrictAddressFamilies=AF_UNIX$/m);
+  assert.match(bootstrap, /^IPAddressDeny=any$/m);
+  assert.match(bootstrap, /^UMask=0077$/m);
+  assert.match(bootstrap, /^Type=oneshot$/m);
+  assert.match(bootstrap, /^RemainAfterExit=yes$/m);
+  // Verify prepare_uds mode 02750 is unchanged in the bootstrap source.
+  const bootstrapSource = await read("native/host-runtime/runtime-trust-bootstrap.c");
+  assert.match(bootstrapSource, /mkdir\(UDS_DIRECTORY, \(mode_t\)02750\)/);
+  assert.match(bootstrapSource, /chmod\(UDS_DIRECTORY, \(mode_t\)02750\)/);
+  assert.match(bootstrapSource, /exact_node\(UDS_DIRECTORY, S_IFDIR, \(uid_t\)AUTHORITY_UID, \(gid_t\)IPC_GID, \(mode_t\)02750, 0\)/);
+  // cleanup_runtime() validation of mode 02750 is unchanged.
+  assert.match(bootstrapSource, /\(uds_node\.st_mode & \(mode_t\)07777\) != \(mode_t\)02750/);
+});
+
 test("lifecycle adapter applies a verb-scoped capability transition", async () => {
   const source = await read("native/host-runtime/runtime-lifecycle-adapter.c");
   // START verbs require the exact two-capability capture set, validate prepared
