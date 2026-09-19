@@ -13,6 +13,7 @@ UMask=0077
 WorkingDirectory=/
 RuntimeDirectory=authority-runtime-bootstrap
 RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 ExecStart=/usr/libexec/zima-control-center/runtime-lifecycle-adapter STATUS_AUTHORITY
 ExecStart=/usr/libexec/zima-control-center/runtime-lifecycle-adapter STATUS_ISSUER
 TimeoutStartSec=30s

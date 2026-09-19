@@ -124,6 +124,10 @@ test("systemd admission orders bootstrap then current Authority readiness then I
   // bootstrap activation re-executes it and regenerates fresh receipts.
   assert.match(stoppedCheck, /^Type=oneshot$/m);
   assert.doesNotMatch(stoppedCheck, /^RemainAfterExit=/m);
+  // RuntimeDirectory is preserved so fresh receipts survive the oneshot exit.
+  assert.match(stoppedCheck, /^RuntimeDirectory=authority-runtime-bootstrap$/m);
+  assert.match(stoppedCheck, /^RuntimeDirectoryMode=0700$/m);
+  assert.match(stoppedCheck, /^RuntimeDirectoryPreserve=yes$/m);
   assert.match(bootstrap, /^Requires=.*zima-control-runtime-stopped-check\.service$/m);
   assert.match(bootstrap, /^After=.*zima-control-runtime-stopped-check\.service$/m);
   assert.doesNotMatch(bootstrap, /^RuntimeDirectory=/m);
@@ -165,7 +169,9 @@ test("stopped-check is a re-executable fresh precondition probe", async () => {
   assert.match(bootstrap, /^Requires=.*zima-control-runtime-stopped-check\.service$/m);
   // trust-mount precondition retained
   assert.match(stoppedCheck, /^Requires=.*var-lib-authority\\x2dtrust\.mount$/m);
-  // the freshness policy is unchanged in the native helper
+  // directory persistence is a lifetime guarantee only; receipt validity is
+  // enforced independently by the native helper.
+  assert.match(stoppedCheck, /^RuntimeDirectoryPreserve=yes$/m);
   const helper = await read("native/host-runtime/runtime-trust-bootstrap.c");
   assert.match(helper, /now\.tv_sec - seconds > 5ULL/);
   assert.match(helper, /valid_stopped_receipt/);

@@ -501,6 +501,26 @@ fail-closed freshness condition, and the 5-second threshold, monotonic/boot-id
 semantics, receipt ownership/mode/format, and fail-closed behavior are
 unchanged.
 
+The unit uses `RuntimeDirectory=authority-runtime-bootstrap`,
+`RuntimeDirectoryMode=0700`, and `RuntimeDirectoryPreserve=yes`. The preserved
+directory keeps the fresh stopped receipts available to the downstream
+bootstrap transaction after the oneshot exits; without preservation, systemd
+would remove the receipt directory when the non-`RemainAfterExit` unit
+deactivates, before bootstrap could consume it.
+
+**Directory lifetime is not receipt validity.** Receipt trust MUST NOT derive
+from directory persistence. Bootstrap independently enforces the current Linux
+boot identity, the 5-second monotonic freshness bound, exact receipt
+ownership/mode/format, and every existing fail-closed check on each
+`PREPARE`. A preserved directory that contains stale, wrong-boot, malformed,
+missing, or wrongly-owned receipts still fails closed. A subsequent successful
+stopped-check execution atomically replaces each receipt with a record carrying
+the current boot id and monotonic second.
+
+The resulting guarantees are therefore three and distinct: ordering
+(`Before=`/`After=`), re-execution (non-`RemainAfterExit` oneshot), and
+directory persistence (`RuntimeDirectoryPreserve=yes`).
+
 The systemd graph MUST separate mount privilege from lifecycle privilege:
 
 1. `zima-control-runtime-bootstrap.service` owns the fixed base protected-mount
