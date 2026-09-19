@@ -233,12 +233,14 @@ test("only mount-changing units carry the exact frozen capability set and host n
   const issuer = await read("deployment/systemd/zima-control-runtime-issuer.service");
   const stoppedCheck = await read("deployment/systemd/zima-control-runtime-stopped-check.service");
   const uninstall = await read("deployment/systemd/zima-control-runtime-uninstall.service");
-  const capture = "CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_SYS_PTRACE CAP_SETPCAP";
-  for (const unit of [bootstrap, readinessMount]) {
-    assert.match(unit, new RegExp(capture));
-    assert.match(unit, /^AmbientCapabilities=$/m);
-    assert.doesNotMatch(unit, /PrivateTmp|PrivateDevices|ProtectSystem|ProtectHome|ReadOnlyPaths|ReadWritePaths|InaccessiblePaths|BindPaths|BindReadOnlyPaths/);
-  }
+  const captureBootstrap = "CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_FSETID CAP_SYS_PTRACE CAP_SETPCAP";
+  const captureReadiness = "CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_SYS_PTRACE CAP_SETPCAP";
+  assert.match(bootstrap, new RegExp(captureBootstrap));
+  assert.match(bootstrap, /^AmbientCapabilities=$/m);
+  assert.doesNotMatch(bootstrap, /PrivateTmp|PrivateDevices|ProtectSystem|ProtectHome|ReadOnlyPaths|ReadWritePaths|InaccessiblePaths|BindPaths|BindReadOnlyPaths/);
+  assert.match(readinessMount, new RegExp(captureReadiness));
+  assert.match(readinessMount, /^AmbientCapabilities=$/m);
+  assert.doesNotMatch(readinessMount, /PrivateTmp|PrivateDevices|ProtectSystem|ProtectHome|ReadOnlyPaths|ReadWritePaths|InaccessiblePaths|BindPaths|BindReadOnlyPaths/);
   // Adapter START units carry exactly the two capture capabilities; the adapter
   // drops them verb-scoped before Docker/lifecycle execution.
   for (const unit of [authority, issuer]) {
@@ -280,7 +282,7 @@ test("bootstrap allows SGID creation for prepare_uds while retaining all other s
   assert.match(bootstrap, /^RestrictSUIDSGID=no$/m);
   // All other frozen sandbox directives remain unchanged.
   assert.match(bootstrap, /^NoNewPrivileges=yes$/m);
-  assert.match(bootstrap, /^CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_SYS_PTRACE CAP_SETPCAP$/m);
+  assert.match(bootstrap, /^CapabilityBoundingSet=CAP_SYS_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN CAP_FOWNER CAP_FSETID CAP_SYS_PTRACE CAP_SETPCAP$/m);
   assert.match(bootstrap, /^AmbientCapabilities=$/m);
   assert.match(bootstrap, /^SystemCallFilter=~setns unshare pivot_root$/m);
   assert.match(bootstrap, /^RestrictAddressFamilies=AF_UNIX$/m);

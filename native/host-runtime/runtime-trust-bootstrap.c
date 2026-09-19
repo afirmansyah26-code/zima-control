@@ -936,9 +936,9 @@ static int capture_host_mount_namespace(struct stat *identity) {
 }
 
 #define CAPTURE_CAPABILITIES ((1U << CAP_CHOWN) | (1U << CAP_DAC_OVERRIDE) \
-  | (1U << CAP_FOWNER) | (1U << CAP_SYS_ADMIN) | (1U << CAP_SYS_PTRACE) | (1U << CAP_SETPCAP))
+  | (1U << CAP_FOWNER) | (1U << CAP_FSETID) | (1U << CAP_SYS_ADMIN) | (1U << CAP_SYS_PTRACE) | (1U << CAP_SETPCAP))
 #define OPERATION_CAPABILITIES ((1U << CAP_CHOWN) | (1U << CAP_DAC_OVERRIDE) \
-  | (1U << CAP_FOWNER) | (1U << CAP_SYS_ADMIN))
+  | (1U << CAP_FOWNER) | (1U << CAP_FSETID) | (1U << CAP_SYS_ADMIN))
 
 static int ambient_capabilities_absent(void) {
   int capability;
@@ -978,7 +978,7 @@ static int exact_mount_capabilities(void) {
   struct __user_cap_header_struct header;
   struct __user_cap_data_struct data[2];
   uint32_t expected = (1U << CAP_CHOWN) | (1U << CAP_DAC_OVERRIDE)
-    | (1U << CAP_FOWNER) | (1U << CAP_SYS_ADMIN);
+    | (1U << CAP_FOWNER) | (1U << CAP_FSETID) | (1U << CAP_SYS_ADMIN);
   int capability;
   memset(&header, 0, sizeof(header));
   memset(data, 0, sizeof(data));
