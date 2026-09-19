@@ -120,7 +120,10 @@ test("systemd admission orders bootstrap then current Authority readiness then I
   assert.match(stoppedCheck, /^PartOf=zima-control-runtime-bootstrap\.service$/m);
   assert.match(stoppedCheck, /^RuntimeDirectory=authority-runtime-bootstrap$/m);
   assert.match(stoppedCheck, /^RuntimeDirectoryMode=0700$/m);
-  assert.match(stoppedCheck, /^RemainAfterExit=yes$/m);
+  // Fresh precondition probe: oneshot WITHOUT RemainAfterExit so a later
+  // bootstrap activation re-executes it and regenerates fresh receipts.
+  assert.match(stoppedCheck, /^Type=oneshot$/m);
+  assert.doesNotMatch(stoppedCheck, /^RemainAfterExit=/m);
   assert.match(bootstrap, /^Requires=.*zima-control-runtime-stopped-check\.service$/m);
   assert.match(bootstrap, /^After=.*zima-control-runtime-stopped-check\.service$/m);
   assert.doesNotMatch(bootstrap, /^RuntimeDirectory=/m);
@@ -146,6 +149,28 @@ test("systemd admission orders bootstrap then current Authority readiness then I
   assert.match(authority, /^Restart=on-failure$/m);
   assert.match(issuer, /^Restart=on-failure$/m);
   assert.doesNotMatch(authority + issuer, /Environment(File)?=|sd_notify|READY=1/);
+});
+
+test("stopped-check is a re-executable fresh precondition probe", async () => {
+  const stoppedCheck = await read("deployment/systemd/zima-control-runtime-stopped-check.service");
+  const bootstrap = await read("deployment/systemd/zima-control-runtime-bootstrap.service");
+  // oneshot without RemainAfterExit returns to inactive and re-executes on a
+  // later start request; this is the re-execution guarantee.
+  assert.match(stoppedCheck, /^Type=oneshot$/m);
+  assert.doesNotMatch(stoppedCheck, /RemainAfterExit/);
+  assert.doesNotMatch(stoppedCheck, /Restart=|ExecStartPre=.*sleep|RuntimeMaxSec|Timer/i);
+  // ordering guarantee
+  assert.match(stoppedCheck, /^Before=zima-control-runtime-bootstrap\.service$/m);
+  assert.match(bootstrap, /^After=.*zima-control-runtime-stopped-check\.service$/m);
+  assert.match(bootstrap, /^Requires=.*zima-control-runtime-stopped-check\.service$/m);
+  // trust-mount precondition retained
+  assert.match(stoppedCheck, /^Requires=.*var-lib-authority\\x2dtrust\.mount$/m);
+  // the freshness policy is unchanged in the native helper
+  const helper = await read("native/host-runtime/runtime-trust-bootstrap.c");
+  assert.match(helper, /now\.tv_sec - seconds > 5ULL/);
+  assert.match(helper, /valid_stopped_receipt/);
+  assert.match(helper, /both_runtimes_stopped/);
+  assert.match(helper, /ZCC_RUNTIME_STOPPED_V1/);
 });
 
 test("lifecycle states distinguish pre-bootstrap stopped status from prepared starts", async () => {

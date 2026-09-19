@@ -472,6 +472,35 @@ Docker authorization, or a public health endpoint.
 
 ## 14. Systemd Boundary
 
+### 14.1 Stopped-check precondition re-execution
+
+`zima-control-runtime-stopped-check.service` is a `Type=oneshot` **fresh
+precondition probe**, not a persistent stateful service. It MUST NOT use
+`RemainAfterExit=yes`. It is `Requires=`/`After=` the trust mount and
+`Before=` bootstrap, and bootstrap `Requires=`/`After=` it.
+
+Both guarantees are required and distinct:
+
+- **Ordering guarantee:** `Before=`/`After=` ensure that, whenever
+  stopped-check participates in the transaction, it completes before
+  bootstrap `PREPARE`.
+- **Re-execution guarantee:** because the unit is a non-`RemainAfterExit`
+  oneshot, it returns to `inactive` after a successful run, so a later
+  bootstrap activation that requires it causes a **new** `STATUS_AUTHORITY`
+  / `STATUS_ISSUER` execution and fresh stopped-state receipt generation.
+
+Without the re-execution guarantee, systemd would satisfy bootstrap's
+`Requires=` from an already-active `RemainAfterExit` unit without re-running
+it, leaving stale receipts. Each bootstrap activation that requires
+stopped-check therefore causes a new verification. Bootstrap consumes the
+resulting receipts only while they remain within the existing **5-second**
+monotonic freshness bound defined in 2C-13.3; otherwise it fails closed.
+This amendment does not claim systemd guarantees the receipt is younger than
+five seconds at the exact bootstrap check — the five-second rule remains a
+fail-closed freshness condition, and the 5-second threshold, monotonic/boot-id
+semantics, receipt ownership/mode/format, and fail-closed behavior are
+unchanged.
+
 The systemd graph MUST separate mount privilege from lifecycle privilege:
 
 1. `zima-control-runtime-bootstrap.service` owns the fixed base protected-mount

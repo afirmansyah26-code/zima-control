@@ -15,7 +15,6 @@ RuntimeDirectory=authority-runtime-bootstrap
 RuntimeDirectoryMode=0700
 ExecStart=/usr/libexec/zima-control-center/runtime-lifecycle-adapter STATUS_AUTHORITY
 ExecStart=/usr/libexec/zima-control-center/runtime-lifecycle-adapter STATUS_ISSUER
-RemainAfterExit=yes
 TimeoutStartSec=30s
 NoNewPrivileges=yes
 PrivateTmp=yes
