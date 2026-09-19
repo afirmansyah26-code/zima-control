@@ -434,7 +434,21 @@ static int full_uid_map(void) {
   return valid ? 0 : -1;
 }
 
-static int member_of(struct passwd *account, gid_t required) {
+#define IDENTITY_BUFFER_SIZE 4096
+
+static int resolve_account(uid_t uid, struct passwd *account, char *buffer, size_t size) {
+  struct passwd *result = NULL;
+  if (getpwuid_r(uid, account, buffer, size, &result) != 0 || result == NULL) return -1;
+  return 0;
+}
+
+static int resolve_group(gid_t gid, struct group *group, char *buffer, size_t size) {
+  struct group *result = NULL;
+  if (getgrgid_r(gid, group, buffer, size, &result) != 0 || result == NULL) return -1;
+  return 0;
+}
+
+static int member_of(const struct passwd *account, gid_t required) {
   gid_t groups[64];
   int count = (int)(sizeof(groups) / sizeof(groups[0]));
   int index;
@@ -444,16 +458,31 @@ static int member_of(struct passwd *account, gid_t required) {
 }
 
 static int validate_identities(gid_t issuer_read_gid) {
-  struct passwd *authority = getpwuid((uid_t)AUTHORITY_UID);
-  struct passwd *issuer = getpwuid((uid_t)ISSUER_UID);
-  struct group *authority_group = getgrgid((gid_t)AUTHORITY_UID);
-  struct group *issuer_group = getgrgid((gid_t)ISSUER_UID);
-  struct group *ipc_group = getgrgid((gid_t)IPC_GID);
-  struct group *read_group = getgrgid(issuer_read_gid);
-  if (authority == NULL || issuer == NULL || authority_group == NULL || issuer_group == NULL
-      || ipc_group == NULL || read_group == NULL || authority->pw_uid == issuer->pw_uid
-      || authority_group->gr_gid == issuer_group->gr_gid || member_of(authority, (gid_t)IPC_GID) != 0
-      || member_of(issuer, (gid_t)IPC_GID) != 0 || member_of(issuer, issuer_read_gid) != 0) return -1;
+  struct passwd authority;
+  struct passwd issuer;
+  struct group authority_group;
+  struct group issuer_group;
+  struct group ipc_group;
+  struct group read_group;
+  char authority_buffer[IDENTITY_BUFFER_SIZE];
+  char issuer_buffer[IDENTITY_BUFFER_SIZE];
+  char authority_group_buffer[IDENTITY_BUFFER_SIZE];
+  char issuer_group_buffer[IDENTITY_BUFFER_SIZE];
+  char ipc_group_buffer[IDENTITY_BUFFER_SIZE];
+  char read_group_buffer[IDENTITY_BUFFER_SIZE];
+  if (resolve_account((uid_t)AUTHORITY_UID, &authority, authority_buffer, sizeof(authority_buffer)) != 0
+      || resolve_account((uid_t)ISSUER_UID, &issuer, issuer_buffer, sizeof(issuer_buffer)) != 0
+      || resolve_group((gid_t)AUTHORITY_UID, &authority_group,
+        authority_group_buffer, sizeof(authority_group_buffer)) != 0
+      || resolve_group((gid_t)ISSUER_UID, &issuer_group,
+        issuer_group_buffer, sizeof(issuer_group_buffer)) != 0
+      || resolve_group((gid_t)IPC_GID, &ipc_group, ipc_group_buffer, sizeof(ipc_group_buffer)) != 0
+      || resolve_group(issuer_read_gid, &read_group, read_group_buffer, sizeof(read_group_buffer)) != 0) return -1;
+  if (authority.pw_uid == issuer.pw_uid
+      || authority_group.gr_gid == issuer_group.gr_gid
+      || member_of(&authority, (gid_t)IPC_GID) != 0
+      || member_of(&issuer, (gid_t)IPC_GID) != 0
+      || member_of(&issuer, issuer_read_gid) != 0) return -1;
   return 0;
 }
 

@@ -736,6 +736,35 @@ test("platform-aware ancestor validation follows Amendment 2C-13.3-A1", async ()
     /^After=docker\.service var-lib-authority\\x2dtrust\.mount$/m);
 });
 
+test("identity validation uses reentrant NSS lookups with independent storage", async () => {
+  const bootstrap = await read("native/host-runtime/runtime-trust-bootstrap.c");
+  const adapter = await read("native/host-runtime/runtime-lifecycle-adapter.c");
+  const readiness = await read("native/host-runtime/runtime-authority-readiness.c");
+  // The distinctness checks require two passwd records and two group records to
+  // coexist; non-reentrant getpwuid/getgrgid alias one static buffer and make
+  // authority->pw_uid == issuer->pw_uid compare overwritten data to itself.
+  assert.doesNotMatch(bootstrap, /\bgetpwuid\s*\(/);
+  assert.doesNotMatch(bootstrap, /\bgetgrgid\s*\(/);
+  assert.match(bootstrap, /getpwuid_r\(/);
+  assert.match(bootstrap, /getgrgid_r\(/);
+  // distinct local storage per record
+  assert.match(bootstrap, /struct passwd authority;/);
+  assert.match(bootstrap, /struct passwd issuer;/);
+  assert.match(bootstrap, /struct group authority_group;/);
+  assert.match(bootstrap, /struct group issuer_group;/);
+  // resolver helpers fail closed on lookup error or ERANGE (getpwuid_r != 0)
+  assert.match(bootstrap, /getpwuid_r\(uid, account, buffer, size, &result\) != 0 \|\| result == NULL/);
+  assert.match(bootstrap, /getgrgid_r\(gid, group, buffer, size, &result\) != 0 \|\| result == NULL/);
+  // identity contract preserved: distinctness + memberships unchanged
+  assert.match(bootstrap, /authority\.pw_uid == issuer\.pw_uid/);
+  assert.match(bootstrap, /authority_group\.gr_gid == issuer_group\.gr_gid/);
+  assert.match(bootstrap, /member_of\(&authority, \(gid_t\)IPC_GID\)/);
+  assert.match(bootstrap, /member_of\(&issuer, issuer_read_gid\)/);
+  // adapter/readiness perform no NSS lookups, so no change is required there
+  assert.doesNotMatch(adapter, /getpwuid|getgrgid|getpwnam|getgrnam/);
+  assert.doesNotMatch(readiness, /getpwuid|getgrgid|getpwnam|getgrnam/);
+});
+
 test("protected ancestors and stale UDS recovery fail closed", async () => {
   const bootstrap = await read("native/host-runtime/runtime-trust-bootstrap.c");
   const unit = await read("deployment/systemd/zima-control-runtime-stopped-check.service");
