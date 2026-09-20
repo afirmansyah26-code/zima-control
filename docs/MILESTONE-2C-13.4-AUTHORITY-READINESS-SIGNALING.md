@@ -159,9 +159,13 @@ root-only bootstrap directory:
 | `/run/authority-runtime-bootstrap/authority-readiness-epoch` | `0` | `21012` | `0440` | Supervisor-created per-start epoch; Authority reads only |
 | `/run/authority-runtime-bootstrap/authority-readiness-state` | `21012` | `21012` | `0600` | Pre-created fixed inode; Authority writes, host gate reads |
 
-The host parent remains `0:0 0700`. Therefore host processes running only as UID
-or GID `21012` cannot traverse to these source paths. Root can access them as
-part of the explicit host-control boundary.
+The host parent directory `/run/authority-runtime-bootstrap` is defined as `0:21012 0710`
+(owner `root`, group `zcc-trust-authority`) as ratified by Amendment 2C-13.4-A1 below.
+This permits the host readiness gate dropping to UID/GID `21012` to execute path traversal
+(`+x`) to validate exact readiness files with zero capabilities, while strictly prohibiting
+directory listing (`-r`). Unprivileged host processes outside group `21012` receive no
+access (`---`). Root retains full management access as part of the explicit host-control
+boundary.
 
 The fixed Authority-only exact-file mounts are:
 
@@ -760,4 +764,63 @@ file contents, DB rows, private key, signature, nonce, challenge, environment,
 secret paths, and arbitrary filesystem errors are not logged. Readiness events
 remain operational telemetry and never become `AuthorityTrustAuditEvent`.
 
-SPECIFICATION FREEZE COMPLETE
+SPECIFICATION FREEZE COMPLETE (AS AMENDED BY AMENDMENT 2C-13.4-A1 BELOW)
+
+## 26. Amendment 2C-13.4-A1 — Protected Bootstrap Traversal Amendment
+
+### 26.1 Context and Motivation
+
+Under the original 2C-13.4 readiness specification, the supervisor bootstrap directory
+`/run/authority-runtime-bootstrap` was defined as `0:0 0700`. The readiness gate binary
+(`/usr/libexec/zima-control-center/runtime-authority-readiness WAIT`) is invoked by systemd
+under `zima-control-runtime-authority.service` (`ExecStartPost`). Because the unit carries
+a strictly bounded capability set (`CapabilityBoundingSet=CAP_SYS_PTRACE CAP_SETPCAP`) to keep the
+Authority lifecycle adapter bounded, the helper starting as root lacks `CAP_DAC_OVERRIDE`
+and cannot open `authority-readiness-state` (`mode 0600 21012:21012`).
+
+Empirical capability probes on disposable staging proved that granting `CAP_DAC_READ_SEARCH`
+or `CAP_DAC_OVERRIDE` to the helper creates an excessive privilege boundary that allows reading
+protected private keys (`issuer-active.pk8` mode `0440`). Conversely, dropping the helper to
+UID/GID 21012 with zero capabilities failed at the Linux VFS layer because `openat(dirfd, ...)`
+enforces `inode_permission(dir_inode, MAY_EXEC)` on the parent directory; with `0700 0:0`, UID 21012
+falls under Other (`---`), preventing directory traversal even with pre-opened directory
+descriptors.
+
+To enable true **Zero-Capability WAIT** after privilege drop without broadening capabilities
+or exposing private key material, this amendment updates the ownership and mode contract of
+the ephemeral bootstrap directory.
+
+### 26.2 Contract Changes
+
+- **Old Contract:**
+  - Path: `/run/authority-runtime-bootstrap`
+  - Owner: `root` (UID 0)
+  - Group: `root` (GID 0)
+  - Mode: `0700` (`rwx------`)
+
+- **New Contract:**
+  - Path: `/run/authority-runtime-bootstrap`
+  - Owner: `root` (UID 0)
+  - Group: `zcc-trust-authority` (GID 21012)
+  - Mode: `0710` (`rwx--x---`)
+
+### 26.3 Security Invariants and Invariant Preservation
+
+1. **Traversal without Listing:** Group `zcc-trust-authority` (GID 21012) possesses execute
+   (`+x` / bit `0010`) permission only. It has no read (`-r` / bit `0040`) permission.
+   Directory enumeration (`opendir`, `readdir`, `getdents64`) by non-root processes fails
+   with `EACCES`.
+2. **Third-Party Denial:** Processes and users outside GID 21012 (including `nobody`, host
+   users, Docker daemon, API, Worker, and Issuer UID `21011` / GID `21011`) fall under
+   Other (`---` / `0000`). They cannot traverse, read, or write to the directory.
+3. **Root Management Control:** Real and effective UID 0 retains full `rwx` ownership for
+   mount staging, supervisor locking, and lifecycle cleanup.
+4. **Preservation of Readiness File Contracts:**
+   - `/run/authority-runtime-bootstrap/authority-readiness-epoch`: retains `0:21012 0440` (exact regular file, ro mount).
+   - `/run/authority-runtime-bootstrap/authority-readiness-state`: retains `21012:21012 0600` (exact regular file, rw mount).
+   - `/run/authority-runtime-bootstrap/supervisor.lock`: retains `0:0 0600` (root exclusive lock).
+   - `/run/authority-runtime-bootstrap/authority-stopped`: retains `0:0 0600/0400` (stopped receipt).
+   - `/run/authority-runtime-bootstrap/issuer-stopped`: retains `0:0 0600/0400` (stopped receipt).
+5. **Private Key Isolation:** Active Issuer keys (`issuer-active.pk8` mode `0640 0:21014`)
+   staged within the directory remain completely unreadable to UID/GID 21012 because DAC
+   evaluates Other permissions as `---`.

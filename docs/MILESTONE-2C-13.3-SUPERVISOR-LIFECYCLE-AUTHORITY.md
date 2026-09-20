@@ -945,4 +945,18 @@ and — for non-root owners — the read-only mount proof together prevent
 any non-root write path to the traversed ancestors. Ownership drift
 against the pinned profile fails closed.
 
-SPECIFICATION FREEZE COMPLETE
+SPECIFICATION FREEZE COMPLETE (AS AMENDED BY AMENDMENTS 2C-13.3-A1 AND 2C-13.4-A1 BELOW)
+
+## 31. Amendment 2C-13.4-A1 — Protected Bootstrap Traversal Amendment
+
+Status: ratified to align supervisor ancestor validation with zero-capability readiness verification.
+
+This amendment updates the supervisor lifecycle contract for `/run/authority-runtime-bootstrap`:
+- Ownership is updated from `0:0` to `0:21012` (`root:zcc-trust-authority`).
+- Permissions are updated from `0700` to `0710` (`rwx--x---`).
+
+Supervisor lifecycle adapter validation requirements:
+- `validate_host_ancestor()` for `/run/authority-runtime-bootstrap` validates `uid=0`, `gid=21012`, `mode=0710`, `exact=1`.
+- `validate_directory()` and supervisor lock parent verification validate `mode=0710` and forbidden mask allowing group execute (`0010`).
+- Supervisor lock `/run/authority-runtime-bootstrap/supervisor.lock` retains `0:0 0600`.
+- Stopped receipts (`authority-stopped` and `issuer-stopped`) retain `0:0 0600/0400`.

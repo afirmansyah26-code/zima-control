@@ -515,7 +515,8 @@ semantics, receipt ownership/mode/format, and fail-closed behavior are
 unchanged.
 
 The unit uses `RuntimeDirectory=authority-runtime-bootstrap`,
-`RuntimeDirectoryMode=0700`, and `RuntimeDirectoryPreserve=yes`. The preserved
+`RuntimeDirectoryMode=0710`, and `RuntimeDirectoryPreserve=yes` (as amended by
+Amendment 2C-13.4-A1 establishing `0:21012 0710 root:zcc-trust-authority`). The preserved
 directory keeps the fresh stopped receipts available to the downstream
 bootstrap transaction after the oneshot exits; without preservation, systemd
 would remove the receipt directory when the non-`RemainAfterExit` unit
@@ -742,3 +743,16 @@ and future deployment separation.
 
 No daemon, helper, unit, mount, container, migration, key, socket, trust state,
 or production operation is created or executed by this specification freeze.
+
+## 22. Amendment 2C-13.4-A1 — Protected Bootstrap Traversal Amendment
+
+Status: ratified to support zero-capability host readiness gate execution.
+
+This amendment updates the realization boundary for the ephemeral bootstrap directory
+`/run/authority-runtime-bootstrap`:
+- Ownership: `0:21012` (`root:zcc-trust-authority`)
+- Mode: `0710` (`rwx--x---`)
+
+The systemd stopped-check service unit uses `RuntimeDirectoryMode=0710` and ensures
+group ownership to GID 21012 (`zcc-trust-authority`). Native mount and supervisor helpers
+verify this exact tuple. All other mount sources, flags, and targets remain strictly as frozen.

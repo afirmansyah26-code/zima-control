@@ -264,7 +264,7 @@ this freeze.
 | active key file | `0` | `issuerReadGid` | `0640` | One link, exact canonical PKCS#8 file |
 | staging/quarantine directories | `0` | `0` | `0700` | Provisioner only |
 | staging/quarantine files | `0` | `0` | `0600` | Provisioner only |
-| `/run/authority-runtime-bootstrap` | `0` | `0` | `0700` | Ephemeral supervisor-owned mount staging |
+| `/run/authority-runtime-bootstrap` | `0` | `21012` | `0710` | Ephemeral supervisor-owned mount staging (as amended by 2C-13.4-A1) |
 | `/run/authority-runtime-trust` | `21012` | `21013` | `02750` | Ephemeral UDS directory |
 | Authority socket | `21012` | `21013` | `0660` | Captured device/inode required |
 
@@ -1191,4 +1191,17 @@ None may be implemented as an incidental daemon-bootstrap choice. There are no
 remaining blockers or unresolved security decisions for the next daemon
 implementation under the supported deployment restrictions.
 
-SPECIFICATION FREEZE COMPLETE
+SPECIFICATION FREEZE COMPLETE (AS AMENDED BY AMENDMENT 2C-13.4-A1 BELOW)
+
+## 34. Amendment 2C-13.4-A1 — Protected Bootstrap Traversal Amendment
+
+Status: ratified to support zero-capability host readiness gate verification.
+
+This amendment updates the ownership and mode of `/run/authority-runtime-bootstrap`
+from `0:0 0700` to `0:21012 0710` (`root:zcc-trust-authority`).
+
+The group execute bit (`--x` / `0010`) permits the Authority readiness helper post-privilege-drop
+(UID/GID 21012) to traverse to exact readiness files (`authority-readiness-epoch` and
+`authority-readiness-state`) without requiring `CAP_DAC_OVERRIDE` or `CAP_DAC_READ_SEARCH`.
+Group read (`-r`) is omitted to strictly prevent directory listing. All other files and mounts within
+the directory retain their exact specified permissions and ownership.
