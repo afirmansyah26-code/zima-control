@@ -11,19 +11,22 @@ export interface OpenTrustDatabase {
   close(): Promise<void>;
 }
 
-export async function openReadOnlyTrustDatabase(): Promise<OpenTrustDatabase> {
-  const client = new PrismaClient({ datasourceUrl: TRUST_DATABASE_URL });
+export async function openReadOnlyTrustDatabase(
+  datasourceUrl: string = TRUST_DATABASE_URL,
+): Promise<OpenTrustDatabase> {
+  const client = new PrismaClient({ datasourceUrl });
   try {
     await client.$executeRawUnsafe("PRAGMA query_only=ON");
     await client.$executeRawUnsafe("PRAGMA foreign_keys=ON");
     await client.$queryRawUnsafe("PRAGMA busy_timeout=5000");
     await assertTrustDatabasePolicy(client);
-    const binding = await client.authorityIssuer.findFirst({
+    const bindings = await client.authorityIssuer.findMany({
       select: { authorityId: true, issuerId: true },
       orderBy: { createdAt: "asc" },
       take: 2,
     });
-    if (!binding || await client.authorityIssuer.count() !== 1) throw new Error("TRUST_DATABASE_IDENTITY_INVALID");
+    if (bindings.length !== 1) throw new Error("TRUST_DATABASE_IDENTITY_INVALID");
+    const binding = bindings[0]!;
     const reader = new PrismaRuntimeTrustSnapshotReader(client as never);
     return Object.freeze({
       reader,

@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { PrismaClient } from "@zima-control-center/trust-prisma-client";
-import { assertTrustDatabasePolicy } from "./database.js";
+import { assertTrustDatabasePolicy, openReadOnlyTrustDatabase } from "./database.js";
 
-async function createTestTrustDatabase(): Promise<{ directory: string; databaseUrl: string; authorityId: string; issuerId: string }> {
+async function createTestTrustDatabase(bindingCount: number = 1): Promise<{ directory: string; databaseUrl: string; authorityId: string; issuerId: string }> {
   const directory = await mkdtemp(join(tmpdir(), "zcc-authority-db-test-"));
   const filePath = join(directory, "trust.sqlite").replaceAll("\\", "/");
   const setupUrl = `file:${filePath}`;
@@ -32,20 +32,43 @@ async function createTestTrustDatabase(): Promise<{ directory: string; databaseU
     await setupClient.authority.create({
       data: { id: authorityId, installationKey: "PRIMARY", createdAt: now, updatedAt: now },
     });
-    await setupClient.authorityIssuer.create({
-      data: {
-        authorityId,
-        issuerId,
-        serviceBoundaryId: randomUUID(),
-        trustStatus: "ACTIVE",
-        stateVersion: 1,
-        trustAuditSequence: 1,
-        bindingEpoch: randomUUID(),
-        createdAt: now,
-        stateChangedAt: now,
-        updatedAt: now,
-      },
-    });
+    if (bindingCount >= 1) {
+      await setupClient.authorityIssuer.create({
+        data: {
+          authorityId,
+          issuerId,
+          serviceBoundaryId: randomUUID(),
+          trustStatus: "ACTIVE",
+          stateVersion: 1,
+          trustAuditSequence: 1,
+          bindingEpoch: randomUUID(),
+          createdAt: now,
+          stateChangedAt: now,
+          updatedAt: now,
+        },
+      });
+    }
+    if (bindingCount >= 2) {
+      const secondAuthorityId = randomUUID();
+      const secondIssuerId = randomUUID();
+      await setupClient.authority.create({
+        data: { id: secondAuthorityId, installationKey: "SECONDARY", createdAt: now, updatedAt: now },
+      });
+      await setupClient.authorityIssuer.create({
+        data: {
+          authorityId: secondAuthorityId,
+          issuerId: secondIssuerId,
+          serviceBoundaryId: randomUUID(),
+          trustStatus: "ACTIVE",
+          stateVersion: 1,
+          trustAuditSequence: 1,
+          bindingEpoch: randomUUID(),
+          createdAt: new Date(now.getTime() + 1000),
+          stateChangedAt: now,
+          updatedAt: now,
+        },
+      });
+    }
   } finally {
     await setupClient.$disconnect();
   }
@@ -121,3 +144,46 @@ test("FAIL: assertTrustDatabasePolicy rejects incorrect database configuration",
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("PASS: openReadOnlyTrustDatabase accepts exactly 1 binding", async () => {
+  const { directory, databaseUrl, authorityId, issuerId } = await createTestTrustDatabase(1);
+  try {
+    const db = await openReadOnlyTrustDatabase(databaseUrl);
+    assert.equal(db.authorityId, authorityId);
+    assert.equal(db.issuerId, issuerId);
+    assert.ok(db.reader);
+    await db.revalidatePolicy();
+    await db.close();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("FAIL: openReadOnlyTrustDatabase rejects with TRUST_DATABASE_IDENTITY_INVALID when 0 bindings exist", async () => {
+  const { directory, databaseUrl } = await createTestTrustDatabase(0);
+  try {
+    await assert.rejects(
+      async () => {
+        await openReadOnlyTrustDatabase(databaseUrl);
+      },
+      /TRUST_DATABASE_IDENTITY_INVALID/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("FAIL: openReadOnlyTrustDatabase rejects with TRUST_DATABASE_IDENTITY_INVALID when 2 bindings exist", async () => {
+  const { directory, databaseUrl } = await createTestTrustDatabase(2);
+  try {
+    await assert.rejects(
+      async () => {
+        await openReadOnlyTrustDatabase(databaseUrl);
+      },
+      /TRUST_DATABASE_IDENTITY_INVALID/,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
