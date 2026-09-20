@@ -17,6 +17,7 @@
 static void *zcc_io_thread_main(void *data);
 static void zcc_close_object_on_io(zcc_native_object *object, const char *code);
 static void zcc_update_interest(zcc_native_object *object);
+static int zcc_should_stop(zcc_runtime *runtime);
 
 void zcc_set_code(zcc_operation *operation, const char *code) {
   size_t length;
@@ -434,44 +435,40 @@ static void zcc_process_accept(zcc_native_object *listener) {
   int attempt;
   zcc_native_object *connection;
   if (operation == NULL || operation->completed != 0) return;
-  accepted = -1;
-  for (attempt = 0; attempt < 3; attempt += 1) {
-    accepted = accept4(listener->fd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
-    if (accepted >= 0 || errno != EINTR) break;
-  }
-  if (accepted < 0) {
-    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ECONNABORTED) return;
-    zcc_close_object_on_io(listener, "PEER_CONNECTION_CLOSED");
+  while (listener->state == ZCC_STATE_OPEN && operation->completed == 0) {
+    accepted = -1;
+    for (attempt = 0; attempt < 3; attempt += 1) {
+      accepted = accept4(listener->fd, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
+      if (accepted >= 0 || errno != EINTR) break;
+    }
+    if (accepted < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ECONNABORTED) return;
+      zcc_close_object_on_io(listener, "PEER_CONNECTION_CLOSED");
+      return;
+    }
+    if (zcc_validate_connected_fd(accepted) != 0) {
+      (void)close(accepted);
+      continue;
+    }
+    if (zcc_capture_credentials(accepted, &operation->credentials) != 0) {
+      (void)close(accepted);
+      continue;
+    }
+    connection = zcc_create_native_object(
+      listener->runtime,
+      ZCC_OBJECT_CONNECTION,
+      accepted,
+      &operation->credentials
+    );
+    if (connection == NULL) {
+      (void)close(accepted);
+      if (zcc_should_stop(listener->runtime) != 0) return;
+      continue;
+    }
+    operation->result_object = connection;
+    zcc_finish_operation(operation, NULL);
     return;
   }
-  operation->result_fd = accepted;
-  if (zcc_validate_connected_fd(accepted) != 0) {
-    (void)close(accepted);
-    operation->result_fd = -1;
-    zcc_finish_operation(operation, "PEER_CONNECTION_INVALID");
-    return;
-  }
-  if (zcc_capture_credentials(accepted, &operation->credentials) != 0) {
-    (void)close(accepted);
-    operation->result_fd = -1;
-    zcc_finish_operation(operation, "PEER_CREDENTIAL_UNAVAILABLE");
-    return;
-  }
-  connection = zcc_create_native_object(
-    listener->runtime,
-    ZCC_OBJECT_CONNECTION,
-    accepted,
-    &operation->credentials
-  );
-  if (connection == NULL) {
-    (void)close(accepted);
-    operation->result_fd = -1;
-    zcc_finish_operation(operation, "PEER_CONNECTION_INVALID");
-    return;
-  }
-  operation->result_fd = -1;
-  operation->result_object = connection;
-  zcc_finish_operation(operation, NULL);
 }
 #endif
 

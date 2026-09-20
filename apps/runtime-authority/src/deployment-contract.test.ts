@@ -916,3 +916,15 @@ test("runtime-authority-readiness WAIT conforms to ratified 2C-13.4 spec without
   assert.doesNotMatch(readiness, /\bconnect\s*\(/);
   assert.match(readiness, /lstat\(SOCKET, &socket_node\) != 0 \|\| exact_socket\(\(uint64_t\)device, \(uint64_t\)inode\) != 0/);
 });
+
+test("Authority main accept loop treats accept_failure as fatal to daemon while client connection failures are non-fatal", async () => {
+  const main = await read("apps/runtime-authority/src/main.ts");
+  const acceptFailureCheck = /if\s*\(outcome\.kind\s*===\s*"accept_failure"\)\s*\{\s*if\s*\(stopping\)\s*break;\s*throw\s+outcome\.error;\s*\}/;
+  assert.match(main, acceptFailureCheck);
+  assert.match(main, /pending\s*=\s*acceptAuthorityConnection\(listener\);/);
+  assert.match(main, /void\s+serveConnection\(connection,\s*admission\)\.finally\(\(\)\s*=>\s*connections\.delete\(connection\)\);/);
+  const serveConnectionBody = main.slice(main.indexOf("async function serveConnection("), main.indexOf("function assertProductionPlatform()"));
+  assert.match(serveConnectionBody, /catch\s*\(error\)\s*\{\s*operationalLog\("runtime_connection_closed",\s*\{\s*errorCode:\s*safeCode\(error\)\s*\}\);\s*\}/);
+  assert.match(serveConnectionBody, /finally\s*\{\s*if\s*\(context\)\s*admission\.closeConnection\(context\.identity\);\s*closeRuntimeConnection\(connection\);\s*\}/);
+  assert.doesNotMatch(serveConnectionBody, /\bthrow\b/);
+});

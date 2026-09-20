@@ -167,3 +167,206 @@ test("portable write model retains offset under bounded backpressure", () => {
   assert.equal(writeStep(7), true);
   assert.equal(offset, frame.length);
 });
+
+type ClientAttempt =
+  | { kind: "valid"; credentials: Credentials }
+  | { kind: "credential_capture_failure" }
+  | { kind: "abrupt_disconnect" }
+  | { kind: "socket_validation_failure" };
+
+class PortableListenerModel {
+  readonly #pump: PortablePumpModel;
+  #listenerActive = true;
+  #pendingAccept: { resolve: (handle: object) => void; reject: (err: Error) => void } | null = null;
+  #closedClients = 0;
+
+  constructor(pump: PortablePumpModel) {
+    this.#pump = pump;
+  }
+
+  get isListening(): boolean {
+    return this.#listenerActive;
+  }
+
+  get closedClientsCount(): number {
+    return this.#closedClients;
+  }
+
+  get hasPendingAccept(): boolean {
+    return this.#pendingAccept !== null;
+  }
+
+  accept(): Promise<object> {
+    assert.ok(this.#listenerActive, "PEER_CONNECTION_CLOSED");
+    assert.ok(this.#pendingAccept === null, "only one pending accept permitted");
+    return new Promise<object>((resolve, reject) => {
+      this.#pendingAccept = { resolve, reject };
+    });
+  }
+
+  processIncoming(attempt: ClientAttempt): { accepted: boolean; listenerRemainsActive: boolean } {
+    assert.ok(this.#listenerActive, "listener closed");
+
+    if (attempt.kind === "socket_validation_failure"
+        || attempt.kind === "credential_capture_failure"
+        || attempt.kind === "abrupt_disconnect") {
+      this.#closedClients += 1;
+      return { accepted: false, listenerRemainsActive: true };
+    }
+
+    const handle = this.#pump.accept(attempt.credentials);
+    const pending = this.#pendingAccept;
+    this.#pendingAccept = null;
+    if (pending) {
+      pending.resolve(handle);
+    }
+    return { accepted: true, listenerRemainsActive: true };
+  }
+
+  listenerInfrastructureFailure(code = "PEER_CONNECTION_CLOSED"): void {
+    this.#listenerActive = false;
+    const pending = this.#pendingAccept;
+    this.#pendingAccept = null;
+    if (pending) {
+      pending.reject(Object.assign(new Error(code), { code }));
+    }
+  }
+
+  close(): void {
+    this.listenerInfrastructureFailure("PEER_CONNECTION_CLOSED");
+  }
+}
+
+test("portable listener model survives credential capture failure, validation failure, and abrupt disconnect", async () => {
+  const pump = new PortablePumpModel();
+  const listener = new PortableListenerModel(pump);
+
+  let acceptedHandle: object | undefined;
+  let acceptError: Error | undefined;
+  const acceptPromise = listener.accept().then(
+    (h) => { acceptedHandle = h; return h; },
+    (err) => { acceptError = err; throw err; }
+  );
+
+  assert.equal(listener.isListening, true);
+  assert.equal(listener.hasPendingAccept, true);
+
+  const r1 = listener.processIncoming({ kind: "socket_validation_failure" });
+  assert.equal(r1.accepted, false);
+  assert.equal(r1.listenerRemainsActive, true);
+  assert.equal(listener.isListening, true);
+  assert.equal(listener.hasPendingAccept, true);
+  assert.equal(acceptedHandle, undefined);
+  assert.equal(acceptError, undefined);
+
+  const r2 = listener.processIncoming({ kind: "credential_capture_failure" });
+  assert.equal(r2.accepted, false);
+  assert.equal(r2.listenerRemainsActive, true);
+  assert.equal(listener.isListening, true);
+  assert.equal(listener.hasPendingAccept, true);
+  assert.equal(acceptedHandle, undefined);
+  assert.equal(acceptError, undefined);
+
+  const r3 = listener.processIncoming({ kind: "abrupt_disconnect" });
+  assert.equal(r3.accepted, false);
+  assert.equal(r3.listenerRemainsActive, true);
+  assert.equal(listener.isListening, true);
+  assert.equal(listener.hasPendingAccept, true);
+  assert.equal(acceptedHandle, undefined);
+  assert.equal(acceptError, undefined);
+
+  assert.equal(listener.closedClientsCount, 3);
+
+  const r4 = listener.processIncoming({
+    kind: "valid",
+    credentials: { pid: 0, uid: 21011, gid: 21011 }
+  });
+  assert.equal(r4.accepted, true);
+  assert.equal(r4.listenerRemainsActive, true);
+  assert.equal(listener.hasPendingAccept, false);
+
+  const result = await acceptPromise;
+  assert.ok(result);
+  assert.equal(acceptedHandle, result);
+  assert.deepEqual(pump.credentials(result), { pid: 0, uid: 21011, gid: 21011 });
+});
+
+test("portable listener model accepts pid=0 and pid>0 with valid UID/GID", async () => {
+  const pump = new PortablePumpModel();
+  const listener = new PortableListenerModel(pump);
+
+  const p1 = listener.accept();
+  listener.processIncoming({ kind: "valid", credentials: { pid: 0, uid: 21011, gid: 21011 } });
+  const c1 = await p1;
+  assert.deepEqual(pump.credentials(c1), { pid: 0, uid: 21011, gid: 21011 });
+
+  const p2 = listener.accept();
+  listener.processIncoming({ kind: "valid", credentials: { pid: 1234, uid: 21011, gid: 21011 } });
+  const c2 = await p2;
+  assert.deepEqual(pump.credentials(c2), { pid: 1234, uid: 21011, gid: 21011 });
+});
+
+test("portable listener model distinguishes client authentication rejection from listener failure", async () => {
+  const pump = new PortablePumpModel();
+  const listener = new PortableListenerModel(pump);
+
+  const authenticateSession = (credentials: Credentials) => {
+    if (credentials.uid !== 21011 || credentials.gid !== 21011) {
+      throw Object.assign(new Error("PEER_NOT_AUTHORIZED"), { code: "PEER_NOT_AUTHORIZED" });
+    }
+    return { authenticated: true };
+  };
+
+  const p1 = listener.accept();
+  listener.processIncoming({ kind: "valid", credentials: { pid: 10, uid: 999, gid: 21011 } });
+  const h1 = await p1;
+  assert.throws(() => authenticateSession(pump.credentials(h1)), /PEER_NOT_AUTHORIZED/);
+  pump.close(h1);
+
+  assert.equal(listener.isListening, true);
+
+  const p2 = listener.accept();
+  listener.processIncoming({ kind: "valid", credentials: { pid: 11, uid: 21011, gid: 999 } });
+  const h2 = await p2;
+  assert.throws(() => authenticateSession(pump.credentials(h2)), /PEER_NOT_AUTHORIZED/);
+  pump.close(h2);
+
+  assert.equal(listener.isListening, true);
+
+  const p3 = listener.accept();
+  listener.processIncoming({ kind: "valid", credentials: { pid: 12, uid: 21011, gid: 21011 } });
+  const h3 = await p3;
+  assert.deepEqual(authenticateSession(pump.credentials(h3)), { authenticated: true });
+});
+
+test("portable listener model propagates actual listener infrastructure failure as fatal", async () => {
+  const pump = new PortablePumpModel();
+  const listener = new PortableListenerModel(pump);
+
+  const p = listener.accept();
+  listener.listenerInfrastructureFailure("PEER_CONNECTION_CLOSED");
+
+  await assert.rejects(p, (err: any) => err.code === "PEER_CONNECTION_CLOSED");
+  assert.equal(listener.isListening, false);
+  assert.equal(listener.hasPendingAccept, false);
+
+  await assert.rejects(async () => listener.accept(), /PEER_CONNECTION_CLOSED/);
+});
+
+test("portable listener model resource safety: no fd leaks, no operation leaks", async () => {
+  const pump = new PortablePumpModel();
+  const listener = new PortableListenerModel(pump);
+
+  const p = listener.accept();
+  for (let i = 0; i < 10; i++) {
+    listener.processIncoming({ kind: i % 2 === 0 ? "credential_capture_failure" : "socket_validation_failure" });
+  }
+  assert.equal(listener.closedClientsCount, 10);
+  assert.equal(listener.isListening, true);
+  assert.equal(listener.hasPendingAccept, true);
+
+  listener.processIncoming({ kind: "valid", credentials: { pid: 42, uid: 21011, gid: 21011 } });
+  const handle = await p;
+  assert.ok(handle);
+  assert.equal(listener.hasPendingAccept, false);
+});

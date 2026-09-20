@@ -188,7 +188,9 @@ test("syscall and malformed-state failures close or reject without fallback", as
   const readBody = functionBody(pump, "zcc_process_read");
   assert.match(failConnect, /close\(operation->result_fd\)/);
   assert.match(createListener, /close\(descriptor\)/);
-  assert.ok(accept.indexOf("close(accepted)") < accept.indexOf("PEER_CREDENTIAL_UNAVAILABLE"));
+  assert.match(accept, /close\(accepted\)/);
+  assert.doesNotMatch(accept, /zcc_finish_operation\([^,]+,\s*"PEER_CREDENTIAL_UNAVAILABLE"\)/);
+  assert.match(accept, /zcc_close_object_on_io\(listener, "PEER_CONNECTION_CLOSED"\)/);
   assert.match(readBody, /zcc_close_object_on_io\(connection, "PEER_CONNECTION_(?:CLOSED|INVALID)"\)/);
   assert.doesNotMatch(pump, /fallback|retryPath|alternatePath/i);
 });
