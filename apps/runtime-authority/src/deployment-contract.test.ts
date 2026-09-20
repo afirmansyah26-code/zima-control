@@ -909,3 +909,10 @@ test("Issuer verifies UDS before Authority authentication and secret pair afterw
   const key = source.indexOf("NodeIssuerPrivateKeyProvider.open");
   assert.ok(uds >= 0 && endpoint > uds && authenticated > endpoint && secrets > authenticated && key > secrets);
 });
+
+test("runtime-authority-readiness WAIT conforms to ratified 2C-13.4 spec without active socket connect probe", async () => {
+  const readiness = await read("native/host-runtime/runtime-authority-readiness.c");
+  assert.doesNotMatch(readiness, /\bprobe_listener\b/);
+  assert.doesNotMatch(readiness, /\bconnect\s*\(/);
+  assert.match(readiness, /lstat\(SOCKET, &socket_node\) != 0 \|\| exact_socket\(\(uint64_t\)device, \(uint64_t\)inode\) != 0/);
+});

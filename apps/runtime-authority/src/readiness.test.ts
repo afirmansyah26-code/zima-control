@@ -6,6 +6,7 @@ import {
   formatAuthorityReadinessState,
   openAuthorityReadinessPublisher,
   parseAuthorityReadinessEpoch,
+  parseAuthorityReadinessState,
   READINESS_DIRECTORY_PATH,
   type ReadinessDirectoryNode,
 } from "./readiness.js";
@@ -34,6 +35,64 @@ test("readiness state is strict, bounded, and instance/socket bound", () => {
   assert.ok(value.length <= 192);
   assert.throws(() => formatAuthorityReadinessState(instance, "READY", { device: 0n, inode: 34n }));
   assert.throws(() => formatAuthorityReadinessState("ar1-stale", "READY", { device: 12n, inode: 34n }));
+});
+
+test("READY state with matching socket metadata => PASS", () => {
+  const stateBuffer = formatAuthorityReadinessState(instance, "READY", { device: 27n, inode: 27573n });
+  const parsed = parseAuthorityReadinessState(stateBuffer, instance, {
+    device: 27n,
+    inode: 27573n,
+    isSocket: true,
+  });
+  assert.equal(parsed.instance, instance);
+  assert.equal(parsed.state, "READY");
+  assert.equal(parsed.socketDevice, 27n);
+  assert.equal(parsed.socketInode, 27573n);
+});
+
+test("missing socket => FAIL", () => {
+  const stateBuffer = formatAuthorityReadinessState(instance, "READY", { device: 27n, inode: 27573n });
+  assert.throws(
+    () => parseAuthorityReadinessState(stateBuffer, instance, null),
+    /READINESS_SOCKET_MISSING/,
+  );
+});
+
+test("wrong device => FAIL", () => {
+  const stateBuffer = formatAuthorityReadinessState(instance, "READY", { device: 27n, inode: 27573n });
+  assert.throws(
+    () => parseAuthorityReadinessState(stateBuffer, instance, { device: 999n, inode: 27573n, isSocket: true }),
+    /READINESS_SOCKET_DEVICE_MISMATCH/,
+  );
+});
+
+test("wrong inode => FAIL", () => {
+  const stateBuffer = formatAuthorityReadinessState(instance, "READY", { device: 27n, inode: 27573n });
+  assert.throws(
+    () => parseAuthorityReadinessState(stateBuffer, instance, { device: 27n, inode: 99999n, isSocket: true }),
+    /READINESS_SOCKET_INODE_MISMATCH/,
+  );
+});
+
+test("wrong epoch => FAIL", () => {
+  const stateBuffer = formatAuthorityReadinessState(instance, "READY", { device: 27n, inode: 27573n });
+  const wrongEpochInstance = "ar1-" + "B".repeat(43);
+  assert.throws(
+    () => parseAuthorityReadinessState(stateBuffer, wrongEpochInstance, { device: 27n, inode: 27573n, isSocket: true }),
+    /READINESS_EPOCH_MISMATCH/,
+  );
+});
+
+test("active socket connect is NOT required for readiness success", () => {
+  // Readiness is strictly proven by epoch verification, state record parsing, and socket stat/inode matching;
+  // no socket connect() or active network handshake is initiated or required.
+  const stateBuffer = formatAuthorityReadinessState(instance, "READY", { device: 42n, inode: 84n });
+  const parsed = parseAuthorityReadinessState(stateBuffer, instance, {
+    device: 42n,
+    inode: 84n,
+    isSocket: true,
+  });
+  assert.equal(parsed.state, "READY");
 });
 
 const overlayFsFixture: ReadinessDirectoryNode = Object.freeze({

@@ -368,21 +368,6 @@ static int read_epoch(char instance[48]) {
   return 0;
 }
 
-static int probe_listener(void) {
-  int fd;
-  int result;
-  struct sockaddr_un address;
-  fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
-  if (fd < 0) return -1;
-  memset(&address, 0, sizeof(address));
-  address.sun_family = AF_UNIX;
-  (void)snprintf(address.sun_path, sizeof(address.sun_path), "%s", SOCKET);
-  result = connect(fd, (const struct sockaddr *)&address, (socklen_t)sizeof(address));
-  if (result != 0 && errno != EINPROGRESS) { (void)close(fd); return -1; }
-  (void)close(fd);
-  return 0;
-}
-
 static int validate_state(const char instance[48]) {
   int fd;
   char record[193];
@@ -416,8 +401,7 @@ static int validate_state(const char instance[48]) {
   if (snprintf(expected, sizeof(expected),
       "ZCC_AUTHORITY_READINESS_STATE_V1\ninstance=%s\nstate=READY\nsocketDevice=%llu\nsocketInode=%llu\n",
       instance, device, inode) != (int)length || memcmp(expected, record, (size_t)length) != 0) return -1;
-  if (lstat(SOCKET, &socket_node) != 0 || exact_socket((uint64_t)device, (uint64_t)inode) != 0
-      || probe_listener() != 0) return -1;
+  if (lstat(SOCKET, &socket_node) != 0 || exact_socket((uint64_t)device, (uint64_t)inode) != 0) return -1;
   return 0;
 }
 

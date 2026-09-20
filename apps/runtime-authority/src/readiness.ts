@@ -54,6 +54,54 @@ export function formatAuthorityReadinessState(
   return output;
 }
 
+export interface ParsedAuthorityReadinessState {
+  readonly instance: string;
+  readonly state: "READY" | "NOT_READY" | "STOPPING";
+  readonly socketDevice: bigint;
+  readonly socketInode: bigint;
+}
+
+export interface ReadinessSocketTarget {
+  readonly device: bigint;
+  readonly inode: bigint;
+  readonly isSocket: boolean;
+}
+
+export function parseAuthorityReadinessState(
+  bytes: Buffer,
+  epochInstance: string,
+  socket?: ReadinessSocketTarget | null,
+): ParsedAuthorityReadinessState {
+  const record = bytes.toString("ascii");
+  if (bytes.length <= 0 || bytes.length > 192 || !record.startsWith(STATE_HEADER) || !record.endsWith("\n")
+    || Buffer.from(record, "ascii").length !== bytes.length || bytes.includes(0)) {
+    throw new Error("READINESS_STATE_INVALID");
+  }
+  const lines = record.split("\n");
+  if (lines.length !== 6 || lines[5] !== "") throw new Error("READINESS_STATE_INVALID");
+  if (!lines[1]?.startsWith("instance=")) throw new Error("READINESS_STATE_INVALID");
+  const instance = lines[1].slice("instance=".length);
+  if (!INSTANCE.test(instance) || instance !== epochInstance) throw new Error("READINESS_EPOCH_MISMATCH");
+  if (!lines[2]?.startsWith("state=")) throw new Error("READINESS_STATE_INVALID");
+  const state = lines[2].slice("state=".length);
+  if (state !== "READY" && state !== "NOT_READY" && state !== "STOPPING") throw new Error("READINESS_STATE_INVALID");
+  if (!lines[3]?.startsWith("socketDevice=")) throw new Error("READINESS_STATE_INVALID");
+  const deviceStr = lines[3].slice("socketDevice=".length);
+  if (!/^[1-9][0-9]*$/.test(deviceStr)) throw new Error("READINESS_STATE_INVALID");
+  const socketDevice = BigInt(deviceStr);
+  if (!lines[4]?.startsWith("socketInode=")) throw new Error("READINESS_STATE_INVALID");
+  const inodeStr = lines[4].slice("socketInode=".length);
+  if (!/^[1-9][0-9]*$/.test(inodeStr)) throw new Error("READINESS_STATE_INVALID");
+  const socketInode = BigInt(inodeStr);
+
+  if (socket === null || socket === undefined) throw new Error("READINESS_SOCKET_MISSING");
+  if (!socket.isSocket) throw new Error("READINESS_SOCKET_NOT_SOCKET");
+  if (socket.device !== socketDevice) throw new Error("READINESS_SOCKET_DEVICE_MISMATCH");
+  if (socket.inode !== socketInode) throw new Error("READINESS_SOCKET_INODE_MISMATCH");
+
+  return { instance, state, socketDevice, socketInode };
+}
+
 export async function openAuthorityReadinessPublisher(): Promise<AuthorityReadinessPublisher> {
   if (process.platform !== "linux" || process.getuid?.() !== 21_012 || process.getgid?.() !== 21_012) {
     throw new Error("READINESS_PLATFORM_INVALID");
