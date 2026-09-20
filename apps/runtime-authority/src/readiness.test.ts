@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  assertAuthorityReadinessDirectory,
+  assertAuthorityReadinessDirectoryForTest,
   formatAuthorityReadinessState,
+  openAuthorityReadinessPublisher,
   parseAuthorityReadinessEpoch,
   READINESS_DIRECTORY_PATH,
+  type ReadinessDirectoryNode,
 } from "./readiness.js";
 
 const instance = "ar1-" + "A".repeat(43);
@@ -31,3 +35,63 @@ test("readiness state is strict, bounded, and instance/socket bound", () => {
   assert.throws(() => formatAuthorityReadinessState(instance, "READY", { device: 0n, inode: 34n }));
   assert.throws(() => formatAuthorityReadinessState("ar1-stale", "READY", { device: 12n, inode: 34n }));
 });
+
+const overlayFsFixture: ReadinessDirectoryNode = Object.freeze({
+  isDirectory: () => true,
+  isSymbolicLink: () => false,
+  uid: 0n,
+  gid: 0n,
+  mode: 0o555,
+  nlink: 1n,
+  dev: 1n,
+  ino: 2n,
+});
+
+test("PASS: readiness directory validation accepts nlink = 1 (OverlayFS container root condition)", () => {
+  assert.doesNotThrow(() => assertAuthorityReadinessDirectory(overlayFsFixture));
+  assert.doesNotThrow(() => assertAuthorityReadinessDirectoryForTest(overlayFsFixture));
+});
+
+test("PASS: readiness directory validation accepts nlink > 1", () => {
+  assert.doesNotThrow(() => assertAuthorityReadinessDirectory({ ...overlayFsFixture, nlink: 2n }));
+  assert.doesNotThrow(() => assertAuthorityReadinessDirectory({ ...overlayFsFixture, nlink: 3n }));
+  assert.doesNotThrow(() => assertAuthorityReadinessDirectory({ ...overlayFsFixture, nlink: 10n }));
+});
+
+test("FAIL: readiness directory validation fails when nlink = 0", () => {
+  assert.throws(
+    () => assertAuthorityReadinessDirectory({ ...overlayFsFixture, nlink: 0n }),
+    /READINESS_DIRECTORY_INVALID/,
+  );
+});
+
+test("FAIL: readiness directory validation fails on invalid owner, group, mode, type, symlink, and dev/ino", () => {
+  // wrong owner
+  assert.throws(() => assertAuthorityReadinessDirectory({ ...overlayFsFixture, uid: 21_012n }), /READINESS_DIRECTORY_INVALID/);
+  assert.throws(() => assertAuthorityReadinessDirectory({ ...overlayFsFixture, uid: 1000n }), /READINESS_DIRECTORY_INVALID/);
+
+  // wrong group
+  assert.throws(() => assertAuthorityReadinessDirectory({ ...overlayFsFixture, gid: 21_012n }), /READINESS_DIRECTORY_INVALID/);
+  assert.throws(() => assertAuthorityReadinessDirectory({ ...overlayFsFixture, gid: 1000n }), /READINESS_DIRECTORY_INVALID/);
+
+  // wrong mode
+  assert.throws(() => assertAuthorityReadinessDirectory({ ...overlayFsFixture, mode: 0o755 }), /READINESS_DIRECTORY_INVALID/);
+  assert.throws(() => assertAuthorityReadinessDirectory({ ...overlayFsFixture, mode: 0o777 }), /READINESS_DIRECTORY_INVALID/);
+  assert.throws(() => assertAuthorityReadinessDirectory({ ...overlayFsFixture, mode: 0o550 }), /READINESS_DIRECTORY_INVALID/);
+  assert.throws(() => assertAuthorityReadinessDirectory({ ...overlayFsFixture, mode: 0o4555 }), /READINESS_DIRECTORY_INVALID/);
+
+  // wrong type
+  assert.throws(() => assertAuthorityReadinessDirectory({ ...overlayFsFixture, isDirectory: () => false }), /READINESS_DIRECTORY_INVALID/);
+
+  // symlink
+  assert.throws(() => assertAuthorityReadinessDirectory({ ...overlayFsFixture, isSymbolicLink: () => true }), /READINESS_DIRECTORY_INVALID/);
+
+  // invalid dev/ino
+  assert.throws(() => assertAuthorityReadinessDirectory({ ...overlayFsFixture, dev: 0n }), /READINESS_DIRECTORY_INVALID/);
+  assert.throws(() => assertAuthorityReadinessDirectory({ ...overlayFsFixture, ino: 0n }), /READINESS_DIRECTORY_INVALID/);
+});
+
+test("FAIL: openAuthorityReadinessPublisher fails closed on unauthorized platform/identity", async () => {
+  await assert.rejects(() => openAuthorityReadinessPublisher(), /READINESS_PLATFORM_INVALID/);
+});
+

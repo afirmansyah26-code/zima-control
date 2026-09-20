@@ -1,4 +1,4 @@
-import { constants } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import { lstat, open, type FileHandle } from "node:fs/promises";
 import type { RuntimeSocketNode } from "@zima-control-center/runtime-trust-authority";
 
@@ -9,6 +9,20 @@ const EPOCH_HEADER = "ZCC_AUTHORITY_READINESS_EPOCH_V1\n";
 const STATE_HEADER = "ZCC_AUTHORITY_READINESS_STATE_V1\n";
 const INSTANCE = /^ar1-[A-Za-z0-9_-]{43}$/;
 const O_CLOEXEC_LINUX = 0x80000;
+
+export type ReadinessDirectoryNode = Pick<BigIntStats,
+  "isDirectory" | "isSymbolicLink" | "uid" | "gid" | "nlink" | "dev" | "ino"
+> & { readonly mode: number | bigint };
+
+export function assertAuthorityReadinessDirectory(directory: ReadinessDirectoryNode): void {
+  if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== 0n || directory.gid !== 0n
+    || (Number(directory.mode) & 0o7777) !== 0o555 || directory.dev === 0n || directory.ino === 0n
+    || directory.nlink < 1n) {
+    throw new Error("READINESS_DIRECTORY_INVALID");
+  }
+}
+
+export const assertAuthorityReadinessDirectoryForTest = assertAuthorityReadinessDirectory;
 
 export interface AuthorityReadinessPublisher {
   publish(state: "READY" | "NOT_READY" | "STOPPING", socket: RuntimeSocketNode): Promise<void>;
@@ -45,10 +59,7 @@ export async function openAuthorityReadinessPublisher(): Promise<AuthorityReadin
     throw new Error("READINESS_PLATFORM_INVALID");
   }
   const directory = await lstat(READINESS_DIRECTORY_PATH, { bigint: true });
-  if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== 0n || directory.gid !== 0n
-    || (Number(directory.mode) & 0o7777) !== 0o555 || directory.nlink < 2n) {
-    throw new Error("READINESS_DIRECTORY_INVALID");
-  }
+  assertAuthorityReadinessDirectory(directory);
   const epoch = await open(READINESS_EPOCH_PATH, constants.O_RDONLY | constants.O_NOFOLLOW | O_CLOEXEC_LINUX);
   let state: FileHandle | undefined;
   try {
