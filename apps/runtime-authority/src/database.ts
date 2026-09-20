@@ -1,7 +1,35 @@
 import { PrismaClient } from "@zima-control-center/trust-prisma-client";
-import { PrismaRuntimeTrustSnapshotReader, type RuntimeTrustSnapshotReader } from "@zima-control-center/runtime-trust-authority";
+import {
+  PrismaRuntimeTrustSnapshotReader,
+  type ReadOnlyTrustClient,
+  type RuntimeTrustSnapshotReader,
+} from "@zima-control-center/runtime-trust-authority";
 
 const TRUST_DATABASE_URL = "file:/run/authority-trust-db/trust.sqlite?mode=ro&connection_limit=1";
+
+class AsyncMutex {
+  private queue = Promise.resolve();
+
+  public runExclusive<T>(task: () => Promise<T>): Promise<T> {
+    let release: () => void;
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const previous = this.queue;
+    this.queue = (async () => {
+      await previous.catch(() => {});
+      await wait;
+    })();
+    return (async () => {
+      await previous.catch(() => {});
+      try {
+        return await task();
+      } finally {
+        release!();
+      }
+    })();
+  }
+}
 
 export interface OpenTrustDatabase {
   readonly reader: RuntimeTrustSnapshotReader;
@@ -27,12 +55,28 @@ export async function openReadOnlyTrustDatabase(
     });
     if (bindings.length !== 1) throw new Error("TRUST_DATABASE_IDENTITY_INVALID");
     const binding = bindings[0]!;
-    const reader = new PrismaRuntimeTrustSnapshotReader(client as never);
+    const mutex = new AsyncMutex();
+    const readerClient: ReadOnlyTrustClient = {
+      $transaction: async <T>(callback: (transaction: any) => Promise<T>): Promise<T> => {
+        return await mutex.runExclusive(async () => {
+          await client.$executeRawUnsafe("BEGIN");
+          try {
+            const result = await callback(client);
+            await client.$executeRawUnsafe("COMMIT");
+            return result;
+          } catch (error) {
+            await client.$executeRawUnsafe("ROLLBACK").catch(() => {});
+            throw error;
+          }
+        });
+      },
+    };
+    const reader = new PrismaRuntimeTrustSnapshotReader(readerClient);
     return Object.freeze({
       reader,
       authorityId: binding.authorityId,
       issuerId: binding.issuerId,
-      revalidatePolicy: () => assertTrustDatabasePolicy(client),
+      revalidatePolicy: () => mutex.runExclusive(() => assertTrustDatabasePolicy(client)),
       close: () => client.$disconnect(),
     });
   } catch (error) {
