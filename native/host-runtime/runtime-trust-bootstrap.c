@@ -1,4 +1,6 @@
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include <errno.h>
 #include <dirent.h>
 #include <fcntl.h>
@@ -119,7 +121,8 @@ static int protected_root_directory_any_group(const char *path) {
   fd = open(path, O_PATH | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
   if (fd < 0 || fstat(fd, &descriptor) != 0 || lstat(path, &after) != 0
       || !same_identity(&before, &descriptor) || !same_identity(&descriptor, &after)) {
-    if (fd >= 0) (void)close(fd); return -1;
+    if (fd >= 0) { (void)close(fd); }
+    return -1;
   }
   (void)close(fd);
   return 0;
@@ -132,7 +135,7 @@ static int validate_protected_ancestors(gid_t issuer_read_gid) {
     && protected_directory("/var/lib/authority-trust/issuer", 0U, issuer_read_gid, (mode_t)0750, 1) == 0
     && protected_directory(KEY_DIRECTORY, 0U, issuer_read_gid, (mode_t)0750, 1) == 0
     && protected_directory("/var/lib/authority-trust/db", 0U, (gid_t)AUTHORITY_UID, (mode_t)0750, 1) == 0
-    && protected_directory(BOOTSTRAP_DIRECTORY, 0U, 0U, (mode_t)0700, 1) == 0 ? 0 : -1;
+    && protected_directory(BOOTSTRAP_DIRECTORY, 0U, (gid_t)AUTHORITY_UID, (mode_t)0710, 1) == 0 ? 0 : -1;
 }
 
 static int full_read_file(const char *path, char *bytes, size_t capacity, size_t *length,
@@ -371,7 +374,8 @@ static int validate_key(const trust_snapshot *snapshot, const boundary_manifest 
   if (fd < 0 || fstat(fd, &value) != 0 || !S_ISREG(value.st_mode) || value.st_nlink != (nlink_t)1
       || value.st_uid != 0U || value.st_gid != (gid_t)manifest->issuer_read_gid
       || (value.st_mode & (mode_t)07777) != (mode_t)0640 || value.st_size <= 0 || value.st_size > (off_t)sizeof(bytes)) {
-    if (fd >= 0) (void)close(fd); return -1;
+    if (fd >= 0) { (void)close(fd); }
+    return -1;
   }
   length = read(fd, bytes, sizeof(bytes));
   if (length != value.st_size || fstat(fd, &confirmed) != 0 || !same_identity(&value, &confirmed)) goto done;
@@ -901,12 +905,13 @@ static int cleanup_runtime(void) {
 
 static int ensure_control_directory(void) {
   int lock_fd;
-  if (mkdir(BOOTSTRAP_DIRECTORY, (mode_t)0700) != 0 && errno != EEXIST) return -1;
-  if (chown(BOOTSTRAP_DIRECTORY, 0U, 0U) != 0 || chmod(BOOTSTRAP_DIRECTORY, (mode_t)0700) != 0
-      || exact_node(BOOTSTRAP_DIRECTORY, S_IFDIR, 0U, 0U, (mode_t)0700, 0) != 0) return -1;
+  if (mkdir(BOOTSTRAP_DIRECTORY, (mode_t)0710) != 0 && errno != EEXIST) return -1;
+  if (chown(BOOTSTRAP_DIRECTORY, 0U, (gid_t)AUTHORITY_UID) != 0 || chmod(BOOTSTRAP_DIRECTORY, (mode_t)0710) != 0
+      || exact_node(BOOTSTRAP_DIRECTORY, S_IFDIR, 0U, (gid_t)AUTHORITY_UID, (mode_t)0710, 0) != 0) return -1;
   lock_fd = open(LOCK, O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_RDWR, (mode_t)0600);
   if (lock_fd < 0 || fchown(lock_fd, 0U, 0U) != 0 || fchmod(lock_fd, (mode_t)0600) != 0) {
-    if (lock_fd >= 0) (void)close(lock_fd); return -1;
+    if (lock_fd >= 0) { (void)close(lock_fd); }
+    return -1;
   }
   return lock_fd;
 }

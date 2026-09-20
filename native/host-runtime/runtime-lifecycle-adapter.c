@@ -1,4 +1,6 @@
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -165,27 +167,33 @@ static int validate_regular(const char *path, mode_t forbidden, int executable) 
   if (fd < 0 || fstat(fd, &descriptor) != 0 || lstat(path, &after) != 0
       || before.st_dev != descriptor.st_dev || before.st_ino != descriptor.st_ino
       || descriptor.st_dev != after.st_dev || descriptor.st_ino != after.st_ino) {
-    if (fd >= 0) (void)close(fd); return -1;
+    if (fd >= 0) { (void)close(fd); }
+    return -1;
+  }
+  (void)close(fd);
+  return 0;
+}
+
+static int validate_directory_with_owner(const char *path, uid_t uid, gid_t gid, mode_t forbidden) {
+  int fd;
+  struct stat before;
+  struct stat descriptor;
+  struct stat after;
+  if (lstat(path, &before) != 0 || !S_ISDIR(before.st_mode) || S_ISLNK(before.st_mode)
+      || before.st_uid != uid || before.st_gid != gid || (before.st_mode & forbidden) != 0U) return -1;
+  fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  if (fd < 0 || fstat(fd, &descriptor) != 0 || lstat(path, &after) != 0
+      || before.st_dev != descriptor.st_dev || before.st_ino != descriptor.st_ino
+      || descriptor.st_dev != after.st_dev || descriptor.st_ino != after.st_ino) {
+    if (fd >= 0) { (void)close(fd); }
+    return -1;
   }
   (void)close(fd);
   return 0;
 }
 
 static int validate_directory(const char *path, mode_t forbidden) {
-  int fd;
-  struct stat before;
-  struct stat descriptor;
-  struct stat after;
-  if (lstat(path, &before) != 0 || !S_ISDIR(before.st_mode) || S_ISLNK(before.st_mode)
-      || before.st_uid != 0U || before.st_gid != 0U || (before.st_mode & forbidden) != 0U) return -1;
-  fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-  if (fd < 0 || fstat(fd, &descriptor) != 0 || lstat(path, &after) != 0
-      || before.st_dev != descriptor.st_dev || before.st_ino != descriptor.st_ino
-      || descriptor.st_dev != after.st_dev || descriptor.st_ino != after.st_ino) {
-    if (fd >= 0) (void)close(fd); return -1;
-  }
-  (void)close(fd);
-  return 0;
+  return validate_directory_with_owner(path, 0U, 0U, forbidden);
 }
 
 static int take_literal(const char **cursor, const char *end, const char *literal) {
@@ -360,7 +368,8 @@ static int validate_platform_directory(const char *path, const platform_owner *o
   if (fd < 0 || fstat(fd, &descriptor) != 0 || lstat(path, &after) != 0
       || before.st_dev != descriptor.st_dev || before.st_ino != descriptor.st_ino
       || descriptor.st_dev != after.st_dev || descriptor.st_ino != after.st_ino) {
-    if (fd >= 0) (void)close(fd); return -1;
+    if (fd >= 0) { (void)close(fd); }
+    return -1;
   }
   (void)close(fd);
   return 0;
@@ -825,7 +834,7 @@ static int validate_prepared_sources(int authority, gid_t issuer_gid) {
       || namespace_before.st_dev == 0U || namespace_before.st_ino == 0U
       || validate_host_ancestor("/", 0U, 0U, 0U, 0) != 0
       || validate_host_ancestor("/run", 0U, 0U, 0U, 0) != 0
-      || validate_host_ancestor("/run/authority-runtime-bootstrap", 0U, 0U, (mode_t)0700, 1) != 0
+      || validate_host_ancestor("/run/authority-runtime-bootstrap", 0U, (gid_t)AUTHORITY_UID, (mode_t)0710, 1) != 0
       || validate_host_ancestor("/run/authority-runtime-trust", (uid_t)AUTHORITY_UID,
         (gid_t)IPC_GID, (mode_t)02750, 1) != 0) return -1;
   if (authority != 0) {
@@ -1082,9 +1091,10 @@ int main(int argc, char **argv) {
     }
   }
   if (validate_directory("/run", (mode_t)0022) != 0
-      || validate_directory("/run/authority-runtime-bootstrap", (mode_t)0077) != 0
+      || validate_directory_with_owner("/run/authority-runtime-bootstrap", 0U, (gid_t)AUTHORITY_UID, (mode_t)07067) != 0
       || lstat("/run/authority-runtime-bootstrap", &lock_parent) != 0
-      || (lock_parent.st_mode & (mode_t)07777) != (mode_t)0700) {
+      || lock_parent.st_uid != 0U || lock_parent.st_gid != (gid_t)AUTHORITY_UID
+      || (lock_parent.st_mode & (mode_t)07777) != (mode_t)0710) {
     result = 66;
     error_code = "INVALID_INSTALLATION";
     goto finish;

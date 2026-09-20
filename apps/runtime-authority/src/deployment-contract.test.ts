@@ -119,14 +119,16 @@ test("systemd admission orders bootstrap then current Authority readiness then I
   assert.match(stoppedCheck, /^Before=zima-control-runtime-bootstrap\.service$/m);
   assert.match(stoppedCheck, /^PartOf=zima-control-runtime-bootstrap\.service$/m);
   assert.match(stoppedCheck, /^RuntimeDirectory=authority-runtime-bootstrap$/m);
-  assert.match(stoppedCheck, /^RuntimeDirectoryMode=0700$/m);
+  assert.match(stoppedCheck, /^RuntimeDirectoryMode=0710$/m);
+  assert.match(stoppedCheck, /^RuntimeDirectoryGroup=zcc-trust-authority$/m);
   // Fresh precondition probe: oneshot WITHOUT RemainAfterExit so a later
   // bootstrap activation re-executes it and regenerates fresh receipts.
   assert.match(stoppedCheck, /^Type=oneshot$/m);
   assert.doesNotMatch(stoppedCheck, /^RemainAfterExit=/m);
   // RuntimeDirectory is preserved so fresh receipts survive the oneshot exit.
   assert.match(stoppedCheck, /^RuntimeDirectory=authority-runtime-bootstrap$/m);
-  assert.match(stoppedCheck, /^RuntimeDirectoryMode=0700$/m);
+  assert.match(stoppedCheck, /^RuntimeDirectoryMode=0710$/m);
+  assert.match(stoppedCheck, /^RuntimeDirectoryGroup=zcc-trust-authority$/m);
   assert.match(stoppedCheck, /^RuntimeDirectoryPreserve=yes$/m);
   assert.match(bootstrap, /^Requires=.*zima-control-runtime-stopped-check\.service$/m);
   assert.match(bootstrap, /^After=.*zima-control-runtime-stopped-check\.service$/m);
@@ -140,7 +142,7 @@ test("systemd admission orders bootstrap then current Authority readiness then I
   assert.match(readinessMount, /ExecStop=.*runtime-authority-readiness CLEANUP/);
   assert.match(bootstrap, /Before=zima-control-runtime-readiness-mount\.service/);
   assert.doesNotMatch(authority, /runtime-authority-readiness (PREPARE|CLEANUP)/);
-  assert.match(authority, /ExecStartPost=.*runtime-authority-readiness WAIT/);
+  assert.match(authority, /^ExecStartPost=\+\/usr\/libexec\/zima-control-center\/runtime-authority-readiness WAIT$/m);
   assert.match(authority, /TimeoutStartSec=60s/);
   assert.match(authority, /TimeoutStopSec=30s/);
   assert.match(authority, /Restart=on-failure/);
@@ -246,6 +248,7 @@ test("only mount-changing units carry the exact frozen capability set and host n
   for (const unit of [authority, issuer]) {
     assert.match(unit, /^CapabilityBoundingSet=CAP_SYS_PTRACE CAP_SETPCAP$/m);
     assert.match(unit, /^AmbientCapabilities=$/m);
+    assert.doesNotMatch(unit, /CAP_DAC_OVERRIDE|CAP_DAC_READ_SEARCH/);
     assert.match(unit, /SystemCallFilter=~@mount setns unshare pivot_root/);
   }
   // Non-START adapter units remain zero-capability.
@@ -255,6 +258,11 @@ test("only mount-changing units carry the exact frozen capability set and host n
   }
   const bootstrapSource = await read("native/host-runtime/runtime-trust-bootstrap.c");
   const readinessSource = await read("native/host-runtime/runtime-authority-readiness.c");
+  assert.match(readinessSource, /static int lockdown_wait_privileges\(void\)/);
+  assert.match(readinessSource, /PR_SET_NO_NEW_PRIVS/);
+  assert.match(readinessSource, /setgroups\(1, groups\)/);
+  assert.match(readinessSource, /setresgid\(\(gid_t\)AUTHORITY_UID/);
+  assert.match(readinessSource, /setresuid\(\(uid_t\)AUTHORITY_UID/);
   for (const source of [bootstrapSource, readinessSource]) {
     assert.match(source, /stat\("\/proc\/self\/ns\/mnt"/);
     assert.match(source, /stat\("\/proc\/1\/ns\/mnt"/);

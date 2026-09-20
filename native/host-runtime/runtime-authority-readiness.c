@@ -1,7 +1,10 @@
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <grp.h>
 #include <limits.h>
 #include <linux/capability.h>
 #include <stdint.h>
@@ -18,6 +21,25 @@
 #include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
+
+#ifndef PR_CAPBSET_READ
+#define PR_CAPBSET_READ 23
+#endif
+#ifndef PR_CAPBSET_DROP
+#define PR_CAPBSET_DROP 24
+#endif
+#ifndef PR_SET_NO_NEW_PRIVS
+#define PR_SET_NO_NEW_PRIVS 38
+#endif
+#ifndef PR_GET_NO_NEW_PRIVS
+#define PR_GET_NO_NEW_PRIVS 39
+#endif
+#ifndef PR_CAP_AMBIENT
+#define PR_CAP_AMBIENT 47
+#endif
+#ifndef PR_CAP_AMBIENT_CLEAR_ALL
+#define PR_CAP_AMBIENT_CLEAR_ALL 4
+#endif
 
 #define ROOT_DIR "/run/authority-runtime-bootstrap"
 #define EPOCH ROOT_DIR "/authority-readiness-epoch"
@@ -43,7 +65,7 @@ static int protected_directory(const char *path, uid_t uid, gid_t gid, mode_t mo
   if (fd < 0 || fstat(fd, &descriptor) != 0 || lstat(path, &after) != 0
       || before.st_dev != descriptor.st_dev || before.st_ino != descriptor.st_ino
       || descriptor.st_dev != after.st_dev || descriptor.st_ino != after.st_ino) {
-    if (fd >= 0) (void)close(fd);
+    if (fd >= 0) { (void)close(fd); }
     return -1;
   }
   (void)close(fd);
@@ -53,7 +75,7 @@ static int protected_directory(const char *path, uid_t uid, gid_t gid, mode_t mo
 static int validate_protected_ancestors(void) {
   return protected_directory("/", 0U, 0U, 0U, 0) == 0
     && protected_directory("/run", 0U, 0U, 0U, 0) == 0
-    && protected_directory(ROOT_DIR, 0U, 0U, (mode_t)0700, 1) == 0
+    && protected_directory(ROOT_DIR, 0U, (gid_t)AUTHORITY_UID, (mode_t)0710, 1) == 0
     && protected_directory("/run/authority-runtime-trust", (uid_t)AUTHORITY_UID,
       (gid_t)IPC_GID, (mode_t)02750, 1) == 0 ? 0 : -1;
 }
@@ -278,7 +300,7 @@ static int prepare(void) {
   struct stat root;
   if (validate_protected_ancestors() != 0
       || lstat(ROOT_DIR, &root) != 0 || !S_ISDIR(root.st_mode) || root.st_uid != 0U
-      || root.st_gid != 0U || (root.st_mode & (mode_t)07777) != (mode_t)0700) return 70;
+      || root.st_gid != (gid_t)AUTHORITY_UID || (root.st_mode & (mode_t)07777) != (mode_t)0710) return 70;
   if (lstat(SOCKET, &root) == 0 || errno != ENOENT) return 71;
   if (validate_old_or_absent(EPOCH, 0U, (gid_t)AUTHORITY_UID, (mode_t)0440, 1) != 0
       || validate_old_or_absent(STATE, (uid_t)AUTHORITY_UID, (gid_t)AUTHORITY_UID, (mode_t)0600, 0) != 0) return 72;
@@ -324,9 +346,15 @@ static int read_epoch(char instance[48]) {
   struct stat before;
   struct stat after;
   fd = open(EPOCH, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-  if (fd < 0 || fstat(fd, &before) != 0) { if (fd >= 0) (void)close(fd); return -1; }
+  if (fd < 0 || fstat(fd, &before) != 0) {
+    if (fd >= 0) { (void)close(fd); }
+    return -1;
+  }
   length = read(fd, record, sizeof(record));
-  if (fstat(fd, &after) != 0) { (void)close(fd); return -1; }
+  if (fstat(fd, &after) != 0) {
+    (void)close(fd);
+    return -1;
+  }
   (void)close(fd);
   if (length != 90 || before.st_dev != after.st_dev || before.st_ino != after.st_ino
       || before.st_size != after.st_size
@@ -367,9 +395,15 @@ static int validate_state(const char instance[48]) {
   unsigned long long inode;
   int consumed = 0;
   fd = open(STATE, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
-  if (fd < 0 || fstat(fd, &before) != 0) { if (fd >= 0) (void)close(fd); return -1; }
+  if (fd < 0 || fstat(fd, &before) != 0) {
+    if (fd >= 0) { (void)close(fd); }
+    return -1;
+  }
   length = read(fd, record, sizeof(record));
-  if (fstat(fd, &after) != 0) { (void)close(fd); return -1; }
+  if (fstat(fd, &after) != 0) {
+    (void)close(fd);
+    return -1;
+  }
   (void)close(fd);
   if (length <= 0 || length > 192 || before.st_dev != after.st_dev || before.st_ino != after.st_ino
       || before.st_size != after.st_size || before.st_size != length
@@ -387,23 +421,128 @@ static int validate_state(const char instance[48]) {
   return 0;
 }
 
+static int lockdown_wait_privileges(void) {
+  gid_t groups[1];
+  gid_t observed_groups[2];
+  uid_t ruid, euid, suid;
+  gid_t rgid, egid, sgid;
+  struct __user_cap_header_struct header;
+  struct __user_cap_data_struct data[2];
+  int cap;
+  int group_count;
+
+  groups[0] = (gid_t)IPC_GID;
+  if (setgroups(1, groups) != 0) return -1;
+
+  if (setresgid((gid_t)AUTHORITY_UID, (gid_t)AUTHORITY_UID, (gid_t)AUTHORITY_UID) != 0) return -1;
+
+  for (cap = 0; cap <= 63; cap += 1) {
+    if (cap != CAP_SETPCAP) {
+      if (prctl(PR_CAPBSET_DROP, cap, 0L, 0L, 0L) != 0 && errno != EINVAL) return -1;
+    }
+  }
+  if (prctl(PR_CAPBSET_DROP, CAP_SETPCAP, 0L, 0L, 0L) != 0 && errno != EINVAL) return -1;
+
+  if (setresuid((uid_t)AUTHORITY_UID, (uid_t)AUTHORITY_UID, (uid_t)AUTHORITY_UID) != 0) return -1;
+
+  if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0L, 0L, 0L) != 0) return -1;
+
+  memset(&header, 0, sizeof(header));
+  memset(data, 0, sizeof(data));
+  header.version = _LINUX_CAPABILITY_VERSION_3;
+  header.pid = 0;
+  if (syscall(SYS_capset, &header, data) != 0) return -1;
+
+  if (prctl(PR_SET_NO_NEW_PRIVS, 1L, 0L, 0L, 0L) != 0) return -1;
+
+  if (getuid() != (uid_t)AUTHORITY_UID || geteuid() != (uid_t)AUTHORITY_UID
+      || getgid() != (gid_t)AUTHORITY_UID || getegid() != (gid_t)AUTHORITY_UID) return -1;
+  if (getresuid(&ruid, &euid, &suid) != 0 || ruid != (uid_t)AUTHORITY_UID
+      || euid != (uid_t)AUTHORITY_UID || suid != (uid_t)AUTHORITY_UID) return -1;
+  if (getresgid(&rgid, &egid, &sgid) != 0 || rgid != (gid_t)AUTHORITY_UID
+      || egid != (gid_t)AUTHORITY_UID || sgid != (gid_t)AUTHORITY_UID) return -1;
+  group_count = getgroups(2, observed_groups);
+  if (group_count != 1 || observed_groups[0] != (gid_t)IPC_GID) return -1;
+
+  if (prctl(PR_GET_NO_NEW_PRIVS, 0L, 0L, 0L, 0L) != 1) return -1;
+
+  memset(&header, 0, sizeof(header));
+  memset(data, 0, sizeof(data));
+  header.version = _LINUX_CAPABILITY_VERSION_3;
+  header.pid = 0;
+  if (syscall(SYS_capget, &header, data) != 0) return -1;
+  if (data[0].effective != 0U || data[0].permitted != 0U || data[0].inheritable != 0U
+      || data[1].effective != 0U || data[1].permitted != 0U || data[1].inheritable != 0U) return -1;
+
+  for (cap = 0; cap <= 63; cap += 1) {
+    if (prctl(PR_CAPBSET_READ, cap, 0L, 0L, 0L) == 1) return -1;
+  }
+
+  for (cap = 0; cap <= 63; cap += 1) {
+    if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, cap, 0L, 0L) == 1) return -1;
+  }
+
+  memset(&header, 0, sizeof(header));
+  memset(data, 0, sizeof(data));
+  header.version = _LINUX_CAPABILITY_VERSION_3;
+  data[0].effective = 1U << CAP_DAC_OVERRIDE;
+  data[0].permitted = 1U << CAP_DAC_OVERRIDE;
+  if (syscall(SYS_capset, &header, data) == 0) return -1;
+  if (setuid(0U) == 0 || seteuid(0U) == 0 || setgid(0U) == 0 || setegid(0U) == 0) return -1;
+
+  return 0;
+}
+
 static int wait_ready(void) {
   char instance[48];
   struct timespec start;
   struct timespec now;
   struct timespec pause = { .tv_sec = 0, .tv_nsec = 100000000L };
-  if (read_epoch(instance) != 0 || clock_gettime(CLOCK_MONOTONIC, &start) != 0) return 74;
+  int lock_fd;
+  struct stat lock_stat;
+
+  if (validate_protected_ancestors() != 0) return 74;
+
+  lock_fd = open(LOCK, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  if (lock_fd < 0 || fstat(lock_fd, &lock_stat) != 0 || !S_ISREG(lock_stat.st_mode)
+      || lock_stat.st_uid != 0U || lock_stat.st_gid != 0U
+      || (lock_stat.st_mode & (mode_t)07777) != (mode_t)0600
+      || lock_stat.st_nlink != (nlink_t)1) {
+    if (lock_fd >= 0) (void)close(lock_fd);
+    return 75;
+  }
+
+  if (lockdown_wait_privileges() != 0) {
+    (void)close(lock_fd);
+    return 75;
+  }
+
+  if (read_epoch(instance) != 0 || clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
+    (void)close(lock_fd);
+    return 74;
+  }
+
   for (;;) {
-    int lock_fd = open(LOCK, O_RDWR | O_NOFOLLOW | O_CLOEXEC);
     int valid;
-    if (lock_fd < 0 || flock(lock_fd, LOCK_EX) != 0) { if (lock_fd >= 0) (void)close(lock_fd); return 75; }
+    if (flock(lock_fd, LOCK_EX) != 0) {
+      (void)close(lock_fd);
+      return 75;
+    }
     valid = validate_state(instance);
     (void)flock(lock_fd, LOCK_UN);
-    (void)close(lock_fd);
-    if (valid == 0) return 0;
-    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 75;
+    if (valid == 0) {
+      (void)close(lock_fd);
+      return 0;
+    }
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+      (void)close(lock_fd);
+      return 75;
+    }
     if ((now.tv_sec - start.tv_sec) > 30L
-        || ((now.tv_sec - start.tv_sec) == 30L && now.tv_nsec >= start.tv_nsec)) return 76;
+        || ((now.tv_sec - start.tv_sec) == 30L && now.tv_nsec >= start.tv_nsec)) {
+      (void)close(lock_fd);
+      return 76;
+    }
     while (nanosleep(&pause, &pause) != 0 && errno == EINTR) { }
     pause.tv_sec = 0; pause.tv_nsec = 100000000L;
   }
@@ -653,7 +792,7 @@ int main(int argc, char **argv) {
   if (clearenv() != 0 || chdir("/") != 0) return 65;
   (void)umask((mode_t)0077);
   if (strcmp(argv[1], "WAIT") == 0) return wait_ready();
-  lock_fd = open(LOCK, O_RDWR | O_NOFOLLOW | O_CLOEXEC);
+  lock_fd = open(LOCK, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
   if (lock_fd < 0 || flock(lock_fd, LOCK_EX) != 0) return 66;
   result = strcmp(argv[1], "PREPARE") == 0 ? prepare() : cleanup();
   if (mount_verb != 0 && host_mount_namespace_unchanged(&mount_namespace) != 0) result = 80;

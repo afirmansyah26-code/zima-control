@@ -8,11 +8,12 @@ PartOf=zima-control-runtime-bootstrap.service
 [Service]
 Type=oneshot
 User=root
-Group=root
+Group=zcc-trust-authority
 UMask=0077
 WorkingDirectory=/
 RuntimeDirectory=authority-runtime-bootstrap
-RuntimeDirectoryMode=0700
+RuntimeDirectoryMode=0710
+RuntimeDirectoryGroup=zcc-trust-authority
 RuntimeDirectoryPreserve=yes
 ExecStart=/usr/libexec/zima-control-center/runtime-lifecycle-adapter STATUS_AUTHORITY
 ExecStart=/usr/libexec/zima-control-center/runtime-lifecycle-adapter STATUS_ISSUER
