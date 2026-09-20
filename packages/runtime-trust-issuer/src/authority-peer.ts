@@ -29,7 +29,7 @@ export async function authenticateAuthorityConnection<TSocket extends object>(
 }
 
 export function assertAuthorityPeer(credentials: AuthorityPeerCredentials): void {
-  if (!Number.isSafeInteger(credentials.pid) || credentials.pid <= 0
+  if (!Number.isSafeInteger(credentials.pid) || credentials.pid < 0 || credentials.pid > 0x7fff_ffff
     || credentials.uid !== RUNTIME_TRUST_AUTHORITY_UID
     || credentials.gid !== RUNTIME_TRUST_AUTHORITY_GID) throw runtimeTrustError("PEER_NOT_AUTHORIZED");
 }

@@ -71,7 +71,7 @@ test("accept captures and validates SO_PEERCRED before allocating an opaque conn
   assert.ok(credentialAt < allocationAt && allocationAt < exposureAt);
   const credential = functionBody(pump, "zcc_capture_credentials");
   assert.match(credential, /getsockopt\(fd, SOL_SOCKET, SO_PEERCRED/);
-  assert.match(credential, /credentials->pid <= 0/);
+  assert.match(credential, /credentials->pid < 0/);
 });
 
 test("generation registry and synchronous invalidation prevent stale handle reuse", async () => {

@@ -201,7 +201,7 @@ static int zcc_capture_credentials(int fd, struct ucred *credentials) {
     if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, credentials, &length) == 0) break;
     if (errno != EINTR) return -1;
   }
-  if (attempt == 3 || length != (socklen_t)sizeof(*credentials) || credentials->pid <= 0) {
+  if (attempt == 3 || length != (socklen_t)sizeof(*credentials) || credentials->pid < 0) {
     return -1;
   }
   return 0;

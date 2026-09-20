@@ -13,7 +13,7 @@ class PortablePumpModel {
   #stopped = false;
 
   accept(credentials: Credentials) {
-    assert.ok(credentials.pid > 0, "SO_PEERCRED-equivalent validation precedes exposure");
+    assert.ok(credentials.pid >= 0 && credentials.pid <= 2147483647, "SO_PEERCRED-equivalent validation precedes exposure");
     assert.ok(this.#live < 16, "connection limit");
     assert.ok(!this.#stopped, "thread stopped");
     const handle = Object.freeze({});
@@ -98,6 +98,18 @@ test("portable model rejects wrong UID/GID without rebinding credential evidence
   assert.equal("fd" in connection, false);
   assert.equal("pointer" in connection, false);
   assert.equal("generation" in connection, false);
+});
+
+test("portable model accepts valid pid range 0..INT32_MAX and rejects negative or out-of-range pid", () => {
+  const pump = new PortablePumpModel();
+  const c0 = pump.accept({ pid: 0, uid: 21011, gid: 21011 });
+  assert.equal(pump.credentials(c0).pid, 0);
+  const c1 = pump.accept({ pid: 1, uid: 21011, gid: 21011 });
+  assert.equal(pump.credentials(c1).pid, 1);
+  const cMax = pump.accept({ pid: 2147483647, uid: 21011, gid: 21011 });
+  assert.equal(pump.credentials(cMax).pid, 2147483647);
+  assert.throws(() => pump.accept({ pid: -1, uid: 21011, gid: 21011 }), /SO_PEERCRED-equivalent validation precedes exposure/);
+  assert.throws(() => pump.accept({ pid: 2147483648, uid: 21011, gid: 21011 }), /SO_PEERCRED-equivalent validation precedes exposure/);
 });
 
 test("portable model invalidates stale handle before a later generation", () => {

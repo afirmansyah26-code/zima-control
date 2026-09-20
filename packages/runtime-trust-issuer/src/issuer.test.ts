@@ -12,7 +12,7 @@ import {
   RuntimeTrustError,
   encodeRuntimeTrustChallenge,
 } from "@zima-control-center/runtime-trust-contracts";
-import { authenticateAuthorityConnection } from "./authority-peer.js";
+import { assertAuthorityPeer, authenticateAuthorityConnection } from "./authority-peer.js";
 import { loadIssuerPrivateKeyProvider } from "./private-key-provider.js";
 import { createRuntimeInstanceId } from "./runtime-identity.js";
 import type { IssuerSecretAccess, IssuerSecretFile } from "./secret-access.js";
@@ -98,6 +98,38 @@ test("authority peer credentials and runtime instance source are exact", async (
   await assert.rejects(authenticateAuthorityConnection({}, { getPeerCredentials: async () => ({ pid: 1, uid: RUNTIME_TRUST_AUTHORITY_UID, gid: 0 }) }, endpoint, inspector), hasCode("PEER_NOT_AUTHORIZED"));
   await assert.rejects(authenticateAuthorityConnection({}, { getPeerCredentials: async () => ({ pid: 1, uid: RUNTIME_TRUST_AUTHORITY_UID, gid: RUNTIME_TRUST_AUTHORITY_GID }) }, {} as never, inspector), hasCode("PEER_NOT_AUTHORIZED"));
   assert.throws(() => createRuntimeInstanceId({ bytes: () => Buffer.alloc(31) }), hasCode("TRANSPORT_FAILURE"));
+
+  // 1. pid=0 accepted
+  assert.doesNotThrow(() => assertAuthorityPeer({ pid: 0, uid: RUNTIME_TRUST_AUTHORITY_UID, gid: RUNTIME_TRUST_AUTHORITY_GID }));
+  await assert.doesNotReject(authenticateAuthorityConnection({}, { getPeerCredentials: async () => ({ pid: 0, uid: RUNTIME_TRUST_AUTHORITY_UID, gid: RUNTIME_TRUST_AUTHORITY_GID }) }, endpoint, inspector));
+
+  // 2. pid=1 accepted
+  assert.doesNotThrow(() => assertAuthorityPeer({ pid: 1, uid: RUNTIME_TRUST_AUTHORITY_UID, gid: RUNTIME_TRUST_AUTHORITY_GID }));
+
+  // 3. pid=INT32_MAX accepted if representable
+  assert.doesNotThrow(() => assertAuthorityPeer({ pid: 2147483647, uid: RUNTIME_TRUST_AUTHORITY_UID, gid: RUNTIME_TRUST_AUTHORITY_GID }));
+  await assert.doesNotReject(authenticateAuthorityConnection({}, { getPeerCredentials: async () => ({ pid: 2147483647, uid: RUNTIME_TRUST_AUTHORITY_UID, gid: RUNTIME_TRUST_AUTHORITY_GID }) }, endpoint, inspector));
+
+  // 4. negative pid rejected & out of range rejected
+  assert.throws(() => assertAuthorityPeer({ pid: -1, uid: RUNTIME_TRUST_AUTHORITY_UID, gid: RUNTIME_TRUST_AUTHORITY_GID }), hasCode("PEER_NOT_AUTHORIZED"));
+  assert.throws(() => assertAuthorityPeer({ pid: 2147483648, uid: RUNTIME_TRUST_AUTHORITY_UID, gid: RUNTIME_TRUST_AUTHORITY_GID }), hasCode("PEER_NOT_AUTHORIZED"));
+  await assert.rejects(authenticateAuthorityConnection({}, { getPeerCredentials: async () => ({ pid: -1, uid: RUNTIME_TRUST_AUTHORITY_UID, gid: RUNTIME_TRUST_AUTHORITY_GID }) }, endpoint, inspector), hasCode("PEER_NOT_AUTHORIZED"));
+  await assert.rejects(authenticateAuthorityConnection({}, { getPeerCredentials: async () => ({ pid: 2147483648, uid: RUNTIME_TRUST_AUTHORITY_UID, gid: RUNTIME_TRUST_AUTHORITY_GID }) }, endpoint, inspector), hasCode("PEER_NOT_AUTHORIZED"));
+
+  // 5. wrong UID rejected
+  assert.throws(() => assertAuthorityPeer({ pid: 0, uid: 0, gid: RUNTIME_TRUST_AUTHORITY_GID }), hasCode("PEER_NOT_AUTHORIZED"));
+  assert.throws(() => assertAuthorityPeer({ pid: 0, uid: 999, gid: RUNTIME_TRUST_AUTHORITY_GID }), hasCode("PEER_NOT_AUTHORIZED"));
+  await assert.rejects(authenticateAuthorityConnection({}, { getPeerCredentials: async () => ({ pid: 0, uid: 999, gid: RUNTIME_TRUST_AUTHORITY_GID }) }, endpoint, inspector), hasCode("PEER_NOT_AUTHORIZED"));
+
+  // 6. wrong GID rejected
+  assert.throws(() => assertAuthorityPeer({ pid: 0, uid: RUNTIME_TRUST_AUTHORITY_UID, gid: 0 }), hasCode("PEER_NOT_AUTHORIZED"));
+  assert.throws(() => assertAuthorityPeer({ pid: 0, uid: RUNTIME_TRUST_AUTHORITY_UID, gid: 999 }), hasCode("PEER_NOT_AUTHORIZED"));
+  await assert.rejects(authenticateAuthorityConnection({}, { getPeerCredentials: async () => ({ pid: 0, uid: RUNTIME_TRUST_AUTHORITY_UID, gid: 999 }) }, endpoint, inspector), hasCode("PEER_NOT_AUTHORIZED"));
+
+  // 8. valid Authority identity remains valid
+  assert.doesNotThrow(() => assertAuthorityPeer({ pid: 0, uid: 21012, gid: 21012 }));
+  assert.doesNotThrow(() => assertAuthorityPeer({ pid: 1, uid: 21012, gid: 21012 }));
+  assert.doesNotThrow(() => assertAuthorityPeer({ pid: 2147483647, uid: 21012, gid: 21012 }));
 });
 
 test("issuer rejects missing, malformed, symlinked, and replaced Authority socket evidence", async () => {

@@ -6,7 +6,7 @@ import {
 import type { RuntimePeerCredentialProvider, RuntimePeerCredentials } from "./types.js";
 
 export function assertIssuerPeer(credentials: RuntimePeerCredentials): void {
-  if (!Number.isSafeInteger(credentials.pid) || credentials.pid <= 0
+  if (!Number.isSafeInteger(credentials.pid) || credentials.pid < 0 || credentials.pid > 0x7fff_ffff
     || credentials.uid !== RUNTIME_TRUST_ISSUER_UID
     || credentials.gid !== RUNTIME_TRUST_ISSUER_GID) throw runtimeTrustError("PEER_NOT_AUTHORIZED");
 }

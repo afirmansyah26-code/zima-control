@@ -10,6 +10,7 @@ import {
   RuntimeTrustError,
 } from "@zima-control-center/runtime-trust-contracts";
 import { authenticateIssuerConnection } from "./connection.js";
+import { assertIssuerPeer } from "./peer-credentials.js";
 import { RuntimeUnauthenticatedConnectionLimiter } from "./connection-limiter.js";
 import type { RuntimeMonotonicClock } from "./types.js";
 import { assertNoPreexistingRuntimeSocket, assertRuntimeSocketUnchanged, captureRuntimeSocket, type RuntimeSocketInspector, type RuntimeSocketNode } from "./uds-policy.js";
@@ -22,6 +23,40 @@ test("peer credential provider is mandatory and exact", async () => {
   assert.equal(accepted.identity, socket);
   await assert.rejects(authenticateIssuerConnection({}, { getPeerCredentials: async () => ({ pid: 1, uid: 0, gid: RUNTIME_TRUST_ISSUER_GID }) }, clock), hasCode("PEER_NOT_AUTHORIZED"));
   await assert.rejects(authenticateIssuerConnection({}, { getPeerCredentials: async () => ({ pid: 1, uid: RUNTIME_TRUST_ISSUER_UID, gid: 0 }) }, clock), hasCode("PEER_NOT_AUTHORIZED"));
+
+  // 1. pid=0 accepted
+  assert.doesNotThrow(() => assertIssuerPeer({ pid: 0, uid: RUNTIME_TRUST_ISSUER_UID, gid: RUNTIME_TRUST_ISSUER_GID }));
+  const acceptedCrossNs = await authenticateIssuerConnection({}, { getPeerCredentials: async () => ({ pid: 0, uid: RUNTIME_TRUST_ISSUER_UID, gid: RUNTIME_TRUST_ISSUER_GID }) }, clock);
+  assert.deepEqual(acceptedCrossNs.peerCredentials, { pid: 0, uid: RUNTIME_TRUST_ISSUER_UID, gid: RUNTIME_TRUST_ISSUER_GID });
+
+  // 2. pid=1 accepted
+  assert.doesNotThrow(() => assertIssuerPeer({ pid: 1, uid: RUNTIME_TRUST_ISSUER_UID, gid: RUNTIME_TRUST_ISSUER_GID }));
+
+  // 3. pid=INT32_MAX accepted if representable
+  assert.doesNotThrow(() => assertIssuerPeer({ pid: 2147483647, uid: RUNTIME_TRUST_ISSUER_UID, gid: RUNTIME_TRUST_ISSUER_GID }));
+  const acceptedMax = await authenticateIssuerConnection({}, { getPeerCredentials: async () => ({ pid: 2147483647, uid: RUNTIME_TRUST_ISSUER_UID, gid: RUNTIME_TRUST_ISSUER_GID }) }, clock);
+  assert.deepEqual(acceptedMax.peerCredentials, { pid: 2147483647, uid: RUNTIME_TRUST_ISSUER_UID, gid: RUNTIME_TRUST_ISSUER_GID });
+
+  // 4. negative pid rejected & out of range rejected
+  assert.throws(() => assertIssuerPeer({ pid: -1, uid: RUNTIME_TRUST_ISSUER_UID, gid: RUNTIME_TRUST_ISSUER_GID }), hasCode("PEER_NOT_AUTHORIZED"));
+  assert.throws(() => assertIssuerPeer({ pid: 2147483648, uid: RUNTIME_TRUST_ISSUER_UID, gid: RUNTIME_TRUST_ISSUER_GID }), hasCode("PEER_NOT_AUTHORIZED"));
+  await assert.rejects(authenticateIssuerConnection({}, { getPeerCredentials: async () => ({ pid: -1, uid: RUNTIME_TRUST_ISSUER_UID, gid: RUNTIME_TRUST_ISSUER_GID }) }, clock), hasCode("PEER_NOT_AUTHORIZED"));
+  await assert.rejects(authenticateIssuerConnection({}, { getPeerCredentials: async () => ({ pid: 2147483648, uid: RUNTIME_TRUST_ISSUER_UID, gid: RUNTIME_TRUST_ISSUER_GID }) }, clock), hasCode("PEER_NOT_AUTHORIZED"));
+
+  // 5. wrong UID rejected
+  assert.throws(() => assertIssuerPeer({ pid: 0, uid: 0, gid: RUNTIME_TRUST_ISSUER_GID }), hasCode("PEER_NOT_AUTHORIZED"));
+  assert.throws(() => assertIssuerPeer({ pid: 0, uid: 999, gid: RUNTIME_TRUST_ISSUER_GID }), hasCode("PEER_NOT_AUTHORIZED"));
+  await assert.rejects(authenticateIssuerConnection({}, { getPeerCredentials: async () => ({ pid: 0, uid: 999, gid: RUNTIME_TRUST_ISSUER_GID }) }, clock), hasCode("PEER_NOT_AUTHORIZED"));
+
+  // 6. wrong GID rejected
+  assert.throws(() => assertIssuerPeer({ pid: 0, uid: RUNTIME_TRUST_ISSUER_UID, gid: 0 }), hasCode("PEER_NOT_AUTHORIZED"));
+  assert.throws(() => assertIssuerPeer({ pid: 0, uid: RUNTIME_TRUST_ISSUER_UID, gid: 999 }), hasCode("PEER_NOT_AUTHORIZED"));
+  await assert.rejects(authenticateIssuerConnection({}, { getPeerCredentials: async () => ({ pid: 0, uid: RUNTIME_TRUST_ISSUER_UID, gid: 999 }) }, clock), hasCode("PEER_NOT_AUTHORIZED"));
+
+  // 7. valid cross-namespace credentials with pid=0, uid=21011, gid=21011 remain valid for Issuer peer
+  assert.doesNotThrow(() => assertIssuerPeer({ pid: 0, uid: 21011, gid: 21011 }));
+  const crossNsIssuer = await authenticateIssuerConnection({}, { getPeerCredentials: async () => ({ pid: 0, uid: 21011, gid: 21011 }) }, clock);
+  assert.deepEqual(crossNsIssuer.peerCredentials, { pid: 0, uid: 21011, gid: 21011 });
 });
 
 test("unauthenticated connection accounting is bounded and recoverable", () => {
