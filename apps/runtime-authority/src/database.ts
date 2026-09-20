@@ -16,7 +16,7 @@ export async function openReadOnlyTrustDatabase(): Promise<OpenTrustDatabase> {
   try {
     await client.$executeRawUnsafe("PRAGMA query_only=ON");
     await client.$executeRawUnsafe("PRAGMA foreign_keys=ON");
-    await client.$executeRawUnsafe("PRAGMA busy_timeout=5000");
+    await client.$queryRawUnsafe("PRAGMA busy_timeout=5000");
     await assertTrustDatabasePolicy(client);
     const binding = await client.authorityIssuer.findFirst({
       select: { authorityId: true, issuerId: true },
@@ -38,7 +38,7 @@ export async function openReadOnlyTrustDatabase(): Promise<OpenTrustDatabase> {
   }
 }
 
-async function assertTrustDatabasePolicy(client: PrismaClient): Promise<void> {
+export async function assertTrustDatabasePolicy(client: PrismaClient): Promise<void> {
   const journal = await client.$queryRawUnsafe<Array<{ journal_mode: string }>>("PRAGMA journal_mode");
   const queryOnly = await client.$queryRawUnsafe<Array<{ query_only: bigint | number }>>("PRAGMA query_only");
   const foreignKeys = await client.$queryRawUnsafe<Array<{ foreign_keys: bigint | number }>>("PRAGMA foreign_keys");
