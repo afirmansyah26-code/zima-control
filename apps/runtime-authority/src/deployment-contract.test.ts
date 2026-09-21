@@ -129,7 +129,8 @@ test("systemd admission orders bootstrap then current Authority readiness then I
   // bootstrap activation re-executes it and regenerates fresh receipts.
   assert.match(stoppedCheck, /^Type=oneshot$/m);
   assert.doesNotMatch(stoppedCheck, /^RemainAfterExit=/m);
-  assert.match(stoppedCheck, /^ReadWritePaths=\/run\/authority-runtime-bootstrap$/m);
+  assert.match(stoppedCheck, /^ReadWritePaths=-\/run\/authority-runtime-bootstrap$/m);
+  assert.doesNotMatch(stoppedCheck, /^ReadWritePaths=\/run\/authority-runtime-bootstrap$/m);
   assert.match(bootstrap, /^Requires=.*zima-control-runtime-stopped-check\.service$/m);
   assert.match(bootstrap, /^After=.*zima-control-runtime-stopped-check\.service$/m);
   assert.doesNotMatch(bootstrap, /^RuntimeDirectory=/m);
@@ -192,9 +193,31 @@ test("stopped-check separates process group identity from runtime directory grou
   assert.doesNotMatch(stoppedCheck, /^RuntimeDirectoryMode=/m);
   assert.doesNotMatch(stoppedCheck, /^RuntimeDirectoryPreserve=/m);
   assert.match(stoppedCheck, /^ExecStartPre=\+\/usr\/bin\/systemd-tmpfiles --create \/usr\/lib\/tmpfiles\.d\/zima-control-runtime-bootstrap\.conf$/m);
+  assert.match(stoppedCheck, /^ReadWritePaths=-\/run\/authority-runtime-bootstrap$/m);
+  assert.doesNotMatch(stoppedCheck, /^ReadWritePaths=\/run\/authority-runtime-bootstrap$/m);
   assert.match(stoppedCheck, /^CapabilityBoundingSet=$/m);
   assert.match(stoppedCheck, /^AmbientCapabilities=$/m);
   assert.doesNotMatch(stoppedCheck, /CAP_CHOWN/);
+  assert.doesNotMatch(stoppedCheck, /CAP_DAC_OVERRIDE/);
+});
+
+test("stopped-check allows namespace setup when bootstrap directory is initially absent", async () => {
+  const stoppedCheck = await read("deployment/systemd/zima-control-runtime-stopped-check.service");
+  // systemd requires '-' prefix so mount namespace setup does not fail with 226/NAMESPACE
+  // when /run/authority-runtime-bootstrap does not exist prior to ExecStartPre execution.
+  assert.match(stoppedCheck, /^ReadWritePaths=-\/run\/authority-runtime-bootstrap$/m);
+  assert.doesNotMatch(stoppedCheck, /^ReadWritePaths=\/run\/authority-runtime-bootstrap$/m);
+  assert.match(stoppedCheck, /^ExecStartPre=\+\/usr\/bin\/systemd-tmpfiles --create \/usr\/lib\/tmpfiles\.d\/zima-control-runtime-bootstrap\.conf$/m);
+  // + prefix on ExecStartPre executes with full privileges on host filesystem before sandbox transitions,
+  // ensuring the directory is realized before ExecStart enters its sandboxed namespace.
+  assert.ok(
+    stoppedCheck.indexOf("ExecStartPre=+/usr/bin/systemd-tmpfiles --create") <
+    stoppedCheck.indexOf("ExecStart=/usr/libexec/zima-control-center/runtime-lifecycle-adapter STATUS_AUTHORITY")
+  );
+  assert.match(stoppedCheck, /^ProtectSystem=strict$/m);
+  assert.match(stoppedCheck, /^CapabilityBoundingSet=$/m);
+  assert.match(stoppedCheck, /^AmbientCapabilities=$/m);
+  assert.doesNotMatch(stoppedCheck, /CAP_CHOWN|CAP_DAC_OVERRIDE/);
 });
 
 test("lifecycle states distinguish pre-bootstrap stopped status from prepared starts", async () => {

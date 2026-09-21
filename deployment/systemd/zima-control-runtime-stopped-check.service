@@ -29,5 +29,5 @@ IPAddressDeny=any
 CapabilityBoundingSet=
 AmbientCapabilities=
 SystemCallFilter=~@mount setns unshare pivot_root
-ReadWritePaths=/run/authority-runtime-bootstrap
+ReadWritePaths=-/run/authority-runtime-bootstrap
 SuccessExitStatus=3
