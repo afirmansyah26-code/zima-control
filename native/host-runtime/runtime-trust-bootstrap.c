@@ -567,11 +567,22 @@ static int exact_mount_flags(const char *path, int read_only) {
 static int same_captured_mount(const char *path, int read_only,
                                const mount_identity *expected, const struct stat *node) {
   mount_identity current;
-  return capture_exact_mount(path, read_only, &current) == 0
-    && current.id == expected->id
-    && current.device_major == expected->device_major
-    && current.device_minor == expected->device_minor
-    && current.device_major == (unsigned int)major(node->st_dev)
+  if (capture_exact_mount(path, read_only, &current) != 0
+      || current.id != expected->id
+      || current.device_major != expected->device_major
+      || current.device_minor != expected->device_minor) return -1;
+  if (strcmp(path, MANIFEST_MOUNT) == 0) {
+    struct stat etc_node;
+    struct stat source_node;
+    if (lstat("/etc", &etc_node) != 0
+        || current.device_major != (unsigned int)major(etc_node.st_dev)
+        || current.device_minor != (unsigned int)minor(etc_node.st_dev)
+        || lstat(MANIFEST, &source_node) != 0
+        || node->st_dev != source_node.st_dev
+        || node->st_ino != source_node.st_ino) return -1;
+    return 0;
+  }
+  return current.device_major == (unsigned int)major(node->st_dev)
     && current.device_minor == (unsigned int)minor(node->st_dev) ? 0 : -1;
 }
 

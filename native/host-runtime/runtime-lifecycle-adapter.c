@@ -48,6 +48,7 @@
 #define UDS_DIRECTORY "/run/authority-runtime-trust"
 #define KEY_MOUNT "/run/authority-runtime-bootstrap/issuer-active.pk8"
 #define MANIFEST_MOUNT "/run/authority-runtime-bootstrap/issuer-boundary.json"
+#define MANIFEST "/etc/authority-trust/issuer-boundary.json"
 #define READINESS_EPOCH "/run/authority-runtime-bootstrap/authority-readiness-epoch"
 #define READINESS_STATE "/run/authority-runtime-bootstrap/authority-readiness-state"
 #define AUTHORITY_UID 21012U
@@ -718,6 +719,8 @@ typedef struct {
   unsigned long mount_id;
   unsigned int device_major;
   unsigned int device_minor;
+  char root[PATH_MAX];
+  char fstype[64];
 } prepared_mount_identity;
 
 static int mount_option(const char *options, const char *expected) {
@@ -743,22 +746,31 @@ static int read_prepared_mount(const char *path, int read_only,
   char line[4096];
   int matches = 0;
   int valid = 0;
-  prepared_mount_identity candidate = { 0UL, 0U, 0U };
+  prepared_mount_identity candidate;
+  memset(&candidate, 0, sizeof(candidate));
   if (file == NULL) return -1;
   while (fgets(line, (int)sizeof(line), file) != NULL) {
     unsigned long mount_id;
     unsigned int device_major;
     unsigned int device_minor;
+    char root[PATH_MAX];
     char mount_point[PATH_MAX];
     char options[1024];
+    char fstype[64];
+    const char *separator;
     if (strchr(line, '\n') == NULL && feof(file) == 0) { matches = -1; break; }
-    if (sscanf(line, "%lu %*s %u:%u %*s %4095s %1023s",
-        &mount_id, &device_major, &device_minor, mount_point, options) == 5
+    separator = strstr(line, " - ");
+    if (separator == NULL) continue;
+    if (sscanf(line, "%lu %*s %u:%u %4095s %4095s %1023s",
+        &mount_id, &device_major, &device_minor, root, mount_point, options) == 6
         && strcmp(mount_point, path) == 0) {
+      if (sscanf(separator + 3, "%63s", fstype) != 1) { matches = -1; break; }
       matches += 1;
       candidate.mount_id = mount_id;
       candidate.device_major = device_major;
       candidate.device_minor = device_minor;
+      (void)snprintf(candidate.root, sizeof(candidate.root), "%s", root);
+      (void)snprintf(candidate.fstype, sizeof(candidate.fstype), "%s", fstype);
       valid = mount_id > 0UL
         && mount_option(options, read_only != 0 ? "ro" : "rw")
         && !mount_option(options, read_only != 0 ? "rw" : "ro")
@@ -810,16 +822,43 @@ static int validate_prepared_mount(const char *path, mode_t kind, uid_t uid, gid
       || before.st_uid != uid || before.st_gid != gid
       || (before.st_mode & (mode_t)07777) != mode
       || (one_link != 0 && before.st_nlink != (nlink_t)1)
-      || read_prepared_mount(path, read_only, &first) != 0
-      || first.device_major != (unsigned int)major(before.st_dev)
-      || first.device_minor != (unsigned int)minor(before.st_dev)) return -1;
+      || read_prepared_mount(path, read_only, &first) != 0) return -1;
+  if (strcmp(first.fstype, "overlay") != 0) {
+    if (first.device_major != (unsigned int)major(before.st_dev)
+        || first.device_minor != (unsigned int)minor(before.st_dev)) return -1;
+  } else {
+    char source_resolved[PATH_MAX];
+    char etc_resolved[PATH_MAX];
+    struct stat source_stat;
+    struct stat etc_stat;
+    if (strcmp(path, MANIFEST_MOUNT) != 0
+        || strcmp(first.root, "/authority-trust/issuer-boundary.json") != 0
+        || host_path(MANIFEST, source_resolved) != 0
+        || host_path("/etc", etc_resolved) != 0
+        || lstat(source_resolved, &source_stat) != 0
+        || lstat(etc_resolved, &etc_stat) != 0
+        || (unsigned int)major(etc_stat.st_dev) != first.device_major
+        || (unsigned int)minor(etc_stat.st_dev) != first.device_minor
+        || before.st_dev != source_stat.st_dev
+        || before.st_ino != source_stat.st_ino
+        || before.st_size != source_stat.st_size
+        || before.st_uid != source_stat.st_uid
+        || before.st_gid != source_stat.st_gid
+        || (before.st_mode & (mode_t)07777) != (source_stat.st_mode & (mode_t)07777)
+        || (source_stat.st_mode & S_IFMT) != S_IFREG
+        || source_stat.st_nlink != (nlink_t)1
+        || source_stat.st_uid != uid
+        || source_stat.st_gid != gid
+        || (source_stat.st_mode & (mode_t)07777) != mode) return -1;
+  }
   fd = open(resolved, O_PATH | O_NOFOLLOW | O_CLOEXEC);
   if (fd < 0 || fstat(fd, &descriptor) != 0 || lstat(resolved, &after) != 0
       || read_prepared_mount(path, read_only, &second) != 0
       || before.st_dev != descriptor.st_dev || before.st_ino != descriptor.st_ino
       || descriptor.st_dev != after.st_dev || descriptor.st_ino != after.st_ino
       || first.mount_id != second.mount_id || first.device_major != second.device_major
-      || first.device_minor != second.device_minor) {
+      || first.device_minor != second.device_minor
+      || strcmp(first.root, second.root) != 0 || strcmp(first.fstype, second.fstype) != 0) {
     if (fd >= 0) (void)close(fd);
     return -1;
   }

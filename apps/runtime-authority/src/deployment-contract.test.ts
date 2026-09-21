@@ -923,6 +923,34 @@ test("lifecycle adapter revalidates PID-1 prepared sources without reading prote
   assert.doesNotMatch(source, /protected_manifest_gid/);
 });
 
+test("lifecycle adapter prepared mount validator enforces OverlayFS solely for MANIFEST_MOUNT while keeping strict checks for ext4/tmpfs", async () => {
+  const source = await read("native/host-runtime/runtime-lifecycle-adapter.c");
+  assert.match(source, /char root\[PATH_MAX\];/);
+  assert.match(source, /char fstype\[64\];/);
+  assert.match(source, /separator = strstr\(line, " - "\);/);
+  assert.match(source, /#define MANIFEST "\/etc\/authority-trust\/issuer-boundary\.json"/);
+  assert.match(source, /if \(strcmp\(first\.fstype, "overlay"\) != 0\)/);
+  assert.match(source, /first\.device_major != \(unsigned int\)major\(before\.st_dev\)\s*\|\|\s*first\.device_minor != \(unsigned int\)minor\(before\.st_dev\)/);
+  assert.match(source, /strcmp\(path, MANIFEST_MOUNT\) != 0/);
+  assert.match(source, /strcmp\(first\.root, "\/authority-trust\/issuer-boundary\.json"\) != 0/);
+  assert.match(source, /host_path\(MANIFEST, source_resolved\)/);
+  assert.match(source, /host_path\("\/etc", etc_resolved\)/);
+  assert.match(source, /\(unsigned int\)major\(etc_stat\.st_dev\) != first\.device_major\s*\|\|\s*\(unsigned int\)minor\(etc_stat\.st_dev\) != first\.device_minor/);
+  assert.match(source, /before\.st_dev != source_stat\.st_dev\s*\|\|\s*before\.st_ino != source_stat\.st_ino/);
+  assert.match(source, /before\.st_size != source_stat\.st_size/);
+  assert.match(source, /before\.st_uid != source_stat\.st_uid\s*\|\|\s*before\.st_gid != source_stat\.st_gid/);
+});
+
+test("runtime-trust-bootstrap cleanup handles OverlayFS device divergence for MANIFEST_MOUNT while remaining strict for other mounts", async () => {
+  const bootstrap = await read("native/host-runtime/runtime-trust-bootstrap.c");
+  assert.match(bootstrap, /if \(strcmp\(path, MANIFEST_MOUNT\) == 0\)/);
+  assert.match(bootstrap, /lstat\("\/etc", &etc_node\) != 0/);
+  assert.match(bootstrap, /current\.device_major != \(unsigned int\)major\(etc_node\.st_dev\)\s*\|\|\s*current\.device_minor != \(unsigned int\)minor\(etc_node\.st_dev\)/);
+  assert.match(bootstrap, /lstat\(MANIFEST, &source_node\) != 0/);
+  assert.match(bootstrap, /node->st_dev != source_node\.st_dev\s*\|\|\s*node->st_ino != source_node\.st_ino/);
+  assert.match(bootstrap, /return current\.device_major == \(unsigned int\)major\(node->st_dev\)\s*&&\s*current\.device_minor == \(unsigned int\)minor\(node->st_dev\)/);
+});
+
 test("cleanup captures exact mount identity and proves consumer absence before non-lazy unmount", async () => {
   const bootstrap = await read("native/host-runtime/runtime-trust-bootstrap.c");
   const readiness = await read("native/host-runtime/runtime-authority-readiness.c");

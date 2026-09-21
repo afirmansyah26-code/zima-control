@@ -15,7 +15,7 @@ export interface VerifiedMount {
   revalidate(): Promise<void>;
   close(): Promise<void>;
 }
-type Record = Readonly<{ id: bigint; device: string }>;
+type Record = Readonly<{ id: bigint; device: string; root: string; fstype: string }>;
 export type RetainedNodeIdentity = Readonly<{
   device: bigint;
   inode: bigint;
@@ -56,10 +56,28 @@ export function parseMountInfoForTest(text: string, path: string, readOnly: bool
       || !options.has("nosuid") || options.has("suid") || !options.has("noexec") || options.has("exec")) {
       throw new Error("MOUNT_FLAGS_INVALID");
     }
-    found.push({ id: BigInt(fields[0]!), device: fields[2]! });
+    found.push({
+      id: BigInt(fields[0]!),
+      device: fields[2]!,
+      root: fields[3]!,
+      fstype: trailing[0]!,
+    });
   }
   if (found.length !== 1) throw new Error("MOUNT_IDENTITY_AMBIGUOUS");
   return found[0]!;
+}
+
+export function assertMountDeviceMatchForTest(record: Record, heldDev: bigint, path: string): void {
+  const held = linuxDevice(heldDev);
+  if (record.device === held) return;
+  if (path === "/run/secrets/authority-trust/issuer-boundary.json"
+      && record.fstype === "overlay"
+      && record.root === "/authority-trust/issuer-boundary.json"
+      && record.device.startsWith("0:")
+      && held.startsWith("0:")) {
+    return;
+  }
+  throw new Error("MOUNT_DEVICE_MISMATCH");
 }
 
 async function verify(policy: Policy): Promise<VerifiedMount> {
@@ -76,13 +94,14 @@ async function verify(policy: Policy): Promise<VerifiedMount> {
     assertRetainedNodeIdentityForTest(identity(before), identity(held));
     const first = parseMountInfoForTest(await readMountInfo(),
       policy.path, policy.readOnly);
-    if (first.device !== linuxDevice(held.dev)) throw new Error("MOUNT_DEVICE_MISMATCH");
+    assertMountDeviceMatchForTest(first, held.dev, policy.path);
     const after = await lstat(policy.path, { bigint: true });
     node(after, policy);
     assertRetainedNodeIdentityForTest(identity(held), identity(after));
     const second = parseMountInfoForTest(await readMountInfo(),
       policy.path, policy.readOnly);
-    if (first.id !== second.id || first.device !== second.device) throw new Error("MOUNT_REPLACED");
+    if (first.id !== second.id || first.device !== second.device
+      || first.root !== second.root || first.fstype !== second.fstype) throw new Error("MOUNT_REPLACED");
     await revalidateAncestors(retainedAncestors);
     const retainedTarget = identity(held);
     let closed = false;
@@ -99,7 +118,8 @@ async function verify(policy: Policy): Promise<VerifiedMount> {
         assertRetainedNodeIdentityForTest(retainedTarget, identity(heldNow));
         assertRetainedNodeIdentityForTest(retainedTarget, identity(pathNow));
         const mountedNow = parseMountInfoForTest(await readMountInfo(), policy.path, policy.readOnly);
-        if (mountedNow.id !== first.id || mountedNow.device !== first.device) throw new Error("MOUNT_REPLACED");
+        if (mountedNow.id !== first.id || mountedNow.device !== first.device
+          || mountedNow.root !== first.root || mountedNow.fstype !== first.fstype) throw new Error("MOUNT_REPLACED");
         await revalidateAncestors(retainedAncestors);
       },
       async close() {
