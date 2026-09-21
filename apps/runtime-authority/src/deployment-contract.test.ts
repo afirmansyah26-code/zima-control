@@ -116,20 +116,20 @@ test("systemd admission orders bootstrap then current Authority readiness then I
   const authority = await read("deployment/systemd/zima-control-runtime-authority.service");
   const issuer = await read("deployment/systemd/zima-control-runtime-issuer.service");
   const target = await read("deployment/systemd/zima-control-runtime-trust.target");
+  assert.match(stoppedCheck, /^User=root$/m);
+  assert.match(stoppedCheck, /^Group=root$/m);
   assert.match(stoppedCheck, /^Before=zima-control-runtime-bootstrap\.service$/m);
   assert.match(stoppedCheck, /^PartOf=zima-control-runtime-bootstrap\.service$/m);
-  assert.match(stoppedCheck, /^RuntimeDirectory=authority-runtime-bootstrap$/m);
-  assert.match(stoppedCheck, /^RuntimeDirectoryMode=0710$/m);
-  assert.match(stoppedCheck, /^RuntimeDirectoryGroup=zcc-trust-authority$/m);
+  assert.doesNotMatch(stoppedCheck, /^RuntimeDirectory=/m);
+  assert.doesNotMatch(stoppedCheck, /^RuntimeDirectoryMode=/m);
+  assert.doesNotMatch(stoppedCheck, /^RuntimeDirectoryGroup=/m);
+  assert.doesNotMatch(stoppedCheck, /^RuntimeDirectoryPreserve=/m);
+  assert.match(stoppedCheck, /^ExecStartPre=\+\/usr\/bin\/systemd-tmpfiles --create \/usr\/lib\/tmpfiles\.d\/zima-control-runtime-bootstrap\.conf$/m);
   // Fresh precondition probe: oneshot WITHOUT RemainAfterExit so a later
   // bootstrap activation re-executes it and regenerates fresh receipts.
   assert.match(stoppedCheck, /^Type=oneshot$/m);
   assert.doesNotMatch(stoppedCheck, /^RemainAfterExit=/m);
-  // RuntimeDirectory is preserved so fresh receipts survive the oneshot exit.
-  assert.match(stoppedCheck, /^RuntimeDirectory=authority-runtime-bootstrap$/m);
-  assert.match(stoppedCheck, /^RuntimeDirectoryMode=0710$/m);
-  assert.match(stoppedCheck, /^RuntimeDirectoryGroup=zcc-trust-authority$/m);
-  assert.match(stoppedCheck, /^RuntimeDirectoryPreserve=yes$/m);
+  assert.match(stoppedCheck, /^ReadWritePaths=\/run\/authority-runtime-bootstrap$/m);
   assert.match(bootstrap, /^Requires=.*zima-control-runtime-stopped-check\.service$/m);
   assert.match(bootstrap, /^After=.*zima-control-runtime-stopped-check\.service$/m);
   assert.doesNotMatch(bootstrap, /^RuntimeDirectory=/m);
@@ -173,12 +173,28 @@ test("stopped-check is a re-executable fresh precondition probe", async () => {
   assert.match(stoppedCheck, /^Requires=.*var-lib-authority\\x2dtrust\.mount$/m);
   // directory persistence is a lifetime guarantee only; receipt validity is
   // enforced independently by the native helper.
-  assert.match(stoppedCheck, /^RuntimeDirectoryPreserve=yes$/m);
+  assert.doesNotMatch(stoppedCheck, /^RuntimeDirectoryPreserve=/m);
   const helper = await read("native/host-runtime/runtime-trust-bootstrap.c");
   assert.match(helper, /now\.tv_sec - seconds > 5ULL/);
   assert.match(helper, /valid_stopped_receipt/);
   assert.match(helper, /both_runtimes_stopped/);
   assert.match(helper, /ZCC_RUNTIME_STOPPED_V1/);
+});
+
+test("stopped-check separates process group identity from runtime directory group via tmpfiles.d", async () => {
+  const stoppedCheck = await read("deployment/systemd/zima-control-runtime-stopped-check.service");
+  const tmpfiles = await read("deployment/tmpfiles.d/zima-control-runtime-bootstrap.conf");
+  assert.match(tmpfiles, /^d \/run\/authority-runtime-bootstrap 0710 root 21012 -$/m);
+  assert.match(stoppedCheck, /^User=root$/m);
+  assert.match(stoppedCheck, /^Group=root$/m);
+  assert.doesNotMatch(stoppedCheck, /^RuntimeDirectory=/m);
+  assert.doesNotMatch(stoppedCheck, /^RuntimeDirectoryGroup=/m);
+  assert.doesNotMatch(stoppedCheck, /^RuntimeDirectoryMode=/m);
+  assert.doesNotMatch(stoppedCheck, /^RuntimeDirectoryPreserve=/m);
+  assert.match(stoppedCheck, /^ExecStartPre=\+\/usr\/bin\/systemd-tmpfiles --create \/usr\/lib\/tmpfiles\.d\/zima-control-runtime-bootstrap\.conf$/m);
+  assert.match(stoppedCheck, /^CapabilityBoundingSet=$/m);
+  assert.match(stoppedCheck, /^AmbientCapabilities=$/m);
+  assert.doesNotMatch(stoppedCheck, /CAP_CHOWN/);
 });
 
 test("lifecycle states distinguish pre-bootstrap stopped status from prepared starts", async () => {
@@ -188,7 +204,7 @@ test("lifecycle states distinguish pre-bootstrap stopped status from prepared st
 
   // PRE-BOOTSTRAP: systemd first creates the fixed control directory, then
   // STATUS records stopped-state evidence without requiring protected mounts.
-  assert.ok(stoppedCheck.indexOf("RuntimeDirectory=authority-runtime-bootstrap")
+  assert.ok(stoppedCheck.indexOf("ExecStartPre=+/usr/bin/systemd-tmpfiles --create")
     < stoppedCheck.indexOf(
       "ExecStart=/usr/libexec/zima-control-center/runtime-lifecycle-adapter STATUS_AUTHORITY"));
   assert.match(stoppedCheck, /STATUS_AUTHORITY[\s\S]*STATUS_ISSUER/);
@@ -255,6 +271,7 @@ test("only mount-changing units carry the exact frozen capability set and host n
   for (const unit of [stoppedCheck, uninstall]) {
     assert.match(unit, /^CapabilityBoundingSet=$/m);
     assert.match(unit, /^AmbientCapabilities=$/m);
+    assert.doesNotMatch(unit, /CAP_CHOWN/);
   }
   const bootstrapSource = await read("native/host-runtime/runtime-trust-bootstrap.c");
   const readinessSource = await read("native/host-runtime/runtime-authority-readiness.c");

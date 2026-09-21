@@ -8,13 +8,10 @@ PartOf=zima-control-runtime-bootstrap.service
 [Service]
 Type=oneshot
 User=root
-Group=zcc-trust-authority
+Group=root
 UMask=0077
 WorkingDirectory=/
-RuntimeDirectory=authority-runtime-bootstrap
-RuntimeDirectoryMode=0710
-RuntimeDirectoryGroup=zcc-trust-authority
-RuntimeDirectoryPreserve=yes
+ExecStartPre=+/usr/bin/systemd-tmpfiles --create /usr/lib/tmpfiles.d/zima-control-runtime-bootstrap.conf
 ExecStart=/usr/libexec/zima-control-center/runtime-lifecycle-adapter STATUS_AUTHORITY
 ExecStart=/usr/libexec/zima-control-center/runtime-lifecycle-adapter STATUS_ISSUER
 TimeoutStartSec=30s
