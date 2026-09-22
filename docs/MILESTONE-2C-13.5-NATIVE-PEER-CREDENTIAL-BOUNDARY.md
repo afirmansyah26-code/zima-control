@@ -890,3 +890,40 @@ path, or full peer credential tuple. PID remains diagnostic only; UID/GID
 mismatch logs use a safe bounded classification rather than raw identity data.
 
 SPECIFICATION FREEZE COMPLETE
+
+## 22. Live Staging Validation — 2026-09-21 / 2026-09-22
+
+### 22.1 Validation Environment & Scope
+- **Staging Target:** Disposable VM `192.168.56.101` (ZimaOS / Linux 6.6.x kernel).
+- **Production Isolation:** Production host `10.10.0.28` was never accessed or addressed.
+- **Scope:** Controlled live peer validation of native Linux Unix domain transport under cross-PID-namespace container topology (B1) and listener resilience against invalid peer connections (B2).
+
+### 22.2 Verified Invariants & Test Results
+1. **B1 Cross-Namespace PID=0 Acceptance (PASS):**
+   - Authority (`pid:[4026532331]`) and Issuer (`pid:[4026532406]`) run in distinct, sibling container PID namespaces.
+   - Kernel `SO_PEERCRED` reported `pid = 0`, `uid = 21011`, `gid = 21011`.
+   - Native peer pump (`runtime_peer_pump.c`) and authorization policy (`assertIssuerPeer`) accepted `pid == 0` within valid range `0..0x7fff_ffff`.
+   - Exact `UID: 21011` (`zcc-trust-issuer`) and `GID: 21011` (`zcc-trust-issuer`) authorization was enforced.
+   - Authenticated trust session was established (`runtime_session_created` on Authority, `runtime_session_established` on Issuer).
+2. **B2 Invalid-Peer Rejection & Listener Resilience (PASS):**
+   - Controlled unauthorized client probe connected to `/run/authority-runtime-trust/authority.sock` with `UID: 0` (root).
+   - Authority native listener accepted connection, evaluated peer credentials, and rejected the unauthorized client (`errorCode: PEER_NOT_AUTHORIZED`).
+   - Accepted client file descriptor was closed immediately; client received clean EOF.
+   - Authority listening socket remained armed and operational on inode `4436` (state `01` / `LISTEN`).
+   - No `accept_failure` or daemon shutdown occurred; zero container restarts occurred.
+3. **Subsequent Valid Peer Acceptance (PASS):**
+   - A subsequent connection with authorized credentials (`UID: 21011`, `GID: 21011`) from the Issuer container was immediately accepted by the armed listener and progressed to frame processing without credential rejection.
+4. **Session & Process Continuity (PASS):**
+   - Authority MainPID `39644` and container ID `cbadcedfba4d` remained uninterrupted throughout all invalid and subsequent probes (`RestartCount=0`, continuous uptime: 11+ hours).
+   - Issuer MainPID `45928` and container ID `cca90103c652` remained uninterrupted (`RestartCount=0`, continuous uptime: 10+ hours).
+5. **Privilege & Network Isolation (PASS):**
+   - Both runtime containers maintained zero capabilities (`CapInh/Prm/Eff/Bnd/Amb = 0000000000000000`).
+   - Network mode: strictly `none`; only loopback `lo` configured; zero TCP/network paths.
+
+### 22.3 Relevant Commits
+- `e746919` — `fix: accept zero pid for cross-namespace peer credentials` (B1)
+- `237e192` — `fix: keep peer listener alive on invalid client` (B2)
+- **Validated Source HEAD:** `605663e2eb62997311aa02462707038aff25ebf2`
+
+### 22.4 Final Status
+**VALIDATED / CLOSED** (Verified on disposable ZimaOS staging).

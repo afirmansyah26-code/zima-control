@@ -824,3 +824,36 @@ the ephemeral bootstrap directory.
 5. **Private Key Isolation:** Active Issuer keys (`issuer-active.pk8` mode `0640 0:21014`)
    staged within the directory remain completely unreadable to UID/GID 21012 because DAC
    evaluates Other permissions as `---`.
+
+## 27. Live Staging Validation — 2026-09-21 / 2026-09-22
+
+### 27.1 Validation Environment & Scope
+- **Staging Target:** Disposable VM `192.168.56.101` (ZimaOS / Linux 6.6.x kernel).
+- **Production Isolation:** Production host `10.10.0.28` was never accessed or addressed.
+- **Scope:** Controlled staging verification of stopped-check, runtime-bootstrap, readiness-mount, Authority cold start, Authority readiness signaling, WAIT zero-capability lockdown, and Issuer cold start under Amendment 2C-13.4-A1.
+
+### 27.2 Verified Invariants & Test Results
+1. **Stopped-Check Preconditions (PASS):** `zima-control-runtime-stopped-check.service` executed with `ReadWritePaths=-/run/authority-runtime-bootstrap` and `systemd-tmpfiles` realization (`root:zcc-trust-authority 0710`), establishing clean pre-bootstrap isolation.
+2. **Runtime Bootstrap & Readiness Mounts (PASS):** `zima-control-runtime-bootstrap.service` and `zima-control-runtime-readiness-mount.service` prepared and hardened ephemeral mounts (`MS_NODEV | MS_NOSUID | MS_NOEXEC | MS_RDONLY`).
+3. **Authority Cold Start (PASS):** `zima-control-runtime-authority.service` started cleanly via host lifecycle adapter (`START_AUTHORITY`).
+4. **Authority Readiness Signaling (PASS):** Authority daemon validated read-only SQLite trust DB, bound UDS socket, and published `state=READY` with exact socket device (`27`) and inode (`4436`) matching `/run/authority-runtime-trust/authority.sock`.
+5. **WAIT Gate Zero-Capability Lockdown (PASS):** `runtime-authority-readiness WAIT` in `ExecStartPost` transitioned to `UID: 21012`, `GID: 21012`, dropped all capabilities to zero (`CapInh/Prm/Eff/Bnd/Amb = 0`), verified `READY` state without active connect probe, and exited `0/SUCCESS`.
+6. **Issuer Cold Start (PASS):** `zima-control-runtime-issuer.service` started cleanly via `START_ISSUER`.
+7. **OverlayFS Manifest Validation (PASS):**
+   - Mountinfo device `0:23` vs. file layer `st_dev 0:24` divergence for `/run/authority-runtime-bootstrap/issuer-boundary.json` was validated against canonical `/etc/authority-trust/issuer-boundary.json` (`st_dev 0:24`, `st_ino 146`, `UID 0`, `GID 21100`, `mode 0640`, `nlink 1`).
+   - Host lifecycle adapter confirmed mountinfo superblock matches host `/etc` device (`0:23`).
+   - Container-side mount-policy permitted OverlayFS device divergence strictly for `/run/secrets/authority-trust/issuer-boundary.json` with matching root `/authority-trust/issuer-boundary.json`.
+8. **Strict ext4/tmpfs Preservation (PASS):** Strict device equality (`mountinfo device == lstat(st_dev)`) remained strictly enforced for ext4 key (`issuer-active.pk8`) and tmpfs UDS (`/run/authority-runtime-trust`).
+
+### 27.3 Relevant Commits
+- `9afcf3a` — `fix: decouple protected runtime bootstrap directory realization`
+- `d3710a4` — `fix: tolerate absent protected runtime bootstrap path`
+- `605663e` — `fix: handle legitimate OverlayFS manifest mounts`
+- **Validated Source HEAD:** `605663e2eb62997311aa02462707038aff25ebf2`
+
+### 27.4 Continuity Evidence
+- **Authority Service:** Continuous uptime (MainPID `39644`, container `cbadcedfba4d`, `RestartCount=0`).
+- **Issuer Service:** Continuous uptime (MainPID `45928`, container `cca90103c652`, `RestartCount=0`).
+
+### 27.5 Final Status
+**VALIDATED / CLOSED** (Verified on disposable ZimaOS staging).
