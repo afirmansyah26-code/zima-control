@@ -176,3 +176,101 @@ export interface ApiErrorResponse {
     message: string;
   };
 }
+
+export const APPLICATION_RUNTIME_STATES = [
+  "UNKNOWN",
+  "STOPPED",
+  "STARTING",
+  "RUNNING",
+  "DEGRADED",
+  "STOPPING",
+  "FAILED",
+  "BLOCKED",
+] as const;
+
+export type ApplicationRuntimeState = (typeof APPLICATION_RUNTIME_STATES)[number];
+
+export interface ApplicationRuntimeSnapshotResponse {
+  schemaVersion: "2026-09-22";
+  snapshotId: string;
+  capturedAt: string;
+  application: {
+    id: string;
+    name: string;
+    zimaosAppId: string | null;
+  };
+  deployment: {
+    id: string;
+    composeName: string;
+    sourceHash: string | null;
+    revision: string;
+  };
+  serviceTopology: {
+    serviceId: string;
+    name: string;
+    containerName: string | null;
+    image: string | null;
+    ports: ApplicationPortResponse[];
+    volumes: ApplicationVolumeResponse[];
+    networks: ApplicationNetworkResponse[];
+    environmentMetadata: ApplicationEnvironmentMetadataResponse[];
+    restartPolicy: string | null;
+  }[];
+  observed: {
+    observationStatus: "SUCCESS" | "UNAVAILABLE" | "INCOMPLETE" | "FAILED";
+    observedAt: string;
+    containers: {
+      containerId: string;
+      containerName: string | null;
+      serviceName: string | null;
+      image: string | null;
+      imageDigest: string | null;
+      status: string;
+      healthStatus: "healthy" | "unhealthy" | "starting" | "none" | null;
+      ports: {
+        hostIp: string | null;
+        hostPort: number | string;
+        containerPort: number;
+        protocol: string;
+      }[];
+    }[];
+  };
+  normalized: {
+    state: ApplicationRuntimeState;
+    reasonCode: string;
+    message: string;
+  };
+  runtimeFingerprint: string;
+}
+
+export type RuntimeDriftCodeResponse =
+  | "MISSING_CONTAINER"
+  | "UNEXPECTED_CONTAINER"
+  | "IMAGE_MISMATCH"
+  | "PORT_MISMATCH"
+  | "NETWORK_MISMATCH"
+  | "VOLUME_MISMATCH"
+  | "HEALTH_MISMATCH"
+  | "REVISION_MISMATCH"
+  | "STATUS_MISMATCH";
+
+export type RuntimeDriftSeverityResponse = "CRITICAL" | "WARNING" | "INFO";
+
+export interface RuntimeDriftFindingResponse {
+  code: RuntimeDriftCodeResponse;
+  severity: RuntimeDriftSeverityResponse;
+  serviceName: string;
+  containerId: string | null;
+  expected: string | null;
+  observed: string | null;
+  details: string;
+}
+
+export interface RuntimeDriftReportResponse {
+  applicationId: string;
+  deploymentId: string;
+  hasDrift: boolean;
+  driftCount: number;
+  findings: RuntimeDriftFindingResponse[];
+  evaluatedAt: string;
+}
