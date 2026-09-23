@@ -1,0 +1,27 @@
+{
+  "name": "@zima-control-center/application-runtime-native-peer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:native": "node-gyp rebuild",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@zima-control-center/application-runtime-contracts": "*"
+  },
+  "devDependencies": {
+    "node-gyp": "^11.1.0"
+  }
+}
