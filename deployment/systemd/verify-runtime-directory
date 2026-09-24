@@ -1,0 +1,73 @@
+#!/bin/sh
+# ==============================================================================
+# verify-runtime-directory
+#
+# Authoritative Precondition Verifier for /run/zcc Parent Directory Realization
+# Frozen in Milestone 2C-14.2 Option B Socket Activation Specification
+#
+# Invariants Enforced (Fail-Closed):
+#   1. Target path exists and is a genuine directory (not a symlink)
+#   2. Owner is root (UID 0)
+#   3. Group is zcc-control (GID 21020)
+#   4. Permission mode is strictly 0755
+#   5. Strictly zero extended POSIX ACLs exist on the directory
+# ==============================================================================
+
+set -eu
+
+TARGET_DIR="${1:-/run/zcc}"
+
+# Invariant 1: Genuine directory and not a symlink
+if [ ! -d "$TARGET_DIR" ]; then
+    echo "ERROR: Runtime directory $TARGET_DIR does not exist" >&2
+    exit 1
+fi
+
+if [ -L "$TARGET_DIR" ]; then
+    echo "ERROR: Runtime directory $TARGET_DIR is a symbolic link (forbidden)" >&2
+    exit 1
+fi
+
+# Invariant 2: Owner must be UID 0 (root)
+UID_VAL=$(stat -c "%u" "$TARGET_DIR" 2>/dev/null || stat -f "%u" "$TARGET_DIR" 2>/dev/null)
+if [ "$UID_VAL" != "0" ]; then
+    echo "ERROR: Runtime directory $TARGET_DIR owner UID is $UID_VAL (expected 0: root)" >&2
+    exit 1
+fi
+
+# Invariant 3: Group must be GID 21020 (zcc-control)
+GID_VAL=$(stat -c "%g" "$TARGET_DIR" 2>/dev/null || stat -f "%g" "$TARGET_DIR" 2>/dev/null)
+if [ "$GID_VAL" != "21020" ]; then
+    echo "ERROR: Runtime directory $TARGET_DIR group GID is $GID_VAL (expected 21020: zcc-control)" >&2
+    exit 1
+fi
+
+# Invariant 4: Mode must be strictly 0755
+MODE_VAL=$(stat -c "%a" "$TARGET_DIR" 2>/dev/null || stat -f "%Lp" "$TARGET_DIR" 2>/dev/null)
+if [ "$MODE_VAL" != "755" ]; then
+    echo "ERROR: Runtime directory $TARGET_DIR mode is $MODE_VAL (expected 755)" >&2
+    exit 1
+fi
+
+# Invariant 5: Strictly zero extended POSIX ACLs
+# Method A: GNU stat mode string check ('+' indicates presence of alternate access method / ACL)
+MODE_STR=$(stat -c "%A" "$TARGET_DIR" 2>/dev/null || stat -f "%Sp" "$TARGET_DIR" 2>/dev/null)
+case "$MODE_STR" in
+    *+)
+        echo "ERROR: Runtime directory $TARGET_DIR has extended ACL entries (mode string: $MODE_STR)" >&2
+        exit 1
+        ;;
+esac
+
+# Method B: getfacl inspection if available
+if command -v getfacl >/dev/null 2>&1; then
+    # getfacl -s (-c --skip-base) returns output ONLY if non-base (extended) ACL entries exist
+    EXTENDED_ACLS=$(getfacl -s -p -c "$TARGET_DIR" 2>/dev/null || true)
+    if [ -n "$EXTENDED_ACLS" ]; then
+        echo "ERROR: Runtime directory $TARGET_DIR contains extended POSIX ACLs:" >&2
+        echo "$EXTENDED_ACLS" >&2
+        exit 1
+    fi
+fi
+
+exit 0

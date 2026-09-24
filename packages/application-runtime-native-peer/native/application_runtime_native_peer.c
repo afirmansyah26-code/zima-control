@@ -113,40 +113,60 @@ static void zcc_on_uv_handle_closed(uv_handle_t *handle) {
   (void)handle;
 }
 
+static void zcc_on_pr_timer_closed(uv_handle_t *handle) {
+  zcc_pending_read_t *pr = (zcc_pending_read_t *)handle->data;
+  if (pr != NULL) {
+    if (pr->payload_buf != NULL) {
+      free(pr->payload_buf);
+      pr->payload_buf = NULL;
+    }
+    free(pr);
+  }
+}
+
+static void zcc_free_pending_read(zcc_pending_read_t *pr) {
+  if (pr == NULL) return;
+  if (pr->timer_active) {
+    pr->timer_active = 0;
+    uv_timer_stop(&pr->timer);
+    uv_close((uv_handle_t *)&pr->timer, zcc_on_pr_timer_closed);
+  } else {
+    if (pr->payload_buf != NULL) {
+      free(pr->payload_buf);
+      pr->payload_buf = NULL;
+    }
+    free(pr);
+  }
+}
+
 static void zcc_internal_close_connection(zcc_connection_t *conn) {
   if (conn == NULL || conn->is_closed) return;
   conn->is_closed = 1;
 
   if (conn->pending_read != NULL) {
     zcc_pending_read_t *pr = conn->pending_read;
-    if (pr->timer_active) {
-      uv_timer_stop(&pr->timer);
-      uv_close((uv_handle_t *)&pr->timer, zcc_on_uv_handle_closed);
-      pr->timer_active = 0;
-    }
-    if (pr->payload_buf != NULL) {
-      free(pr->payload_buf);
-      pr->payload_buf = NULL;
-    }
-    zcc_reject_deferred(conn->env, pr->deferred, "PEER_CONNECTION_CLOSED", "Connection closed during read");
-    free(pr);
     conn->pending_read = NULL;
+    napi_deferred def = pr->deferred;
+    zcc_free_pending_read(pr);
+    zcc_reject_deferred(conn->env, def, "PEER_CONNECTION_CLOSED", "Connection closed during read");
   }
 
   if (conn->pending_write != NULL) {
     zcc_pending_write_t *pw = conn->pending_write;
+    conn->pending_write = NULL;
+    napi_deferred def = pw->deferred;
     if (pw->buffer != NULL) {
       free(pw->buffer);
       pw->buffer = NULL;
     }
-    zcc_reject_deferred(conn->env, pw->deferred, "PEER_CONNECTION_CLOSED", "Connection closed during write");
     free(pw);
-    conn->pending_write = NULL;
+    zcc_reject_deferred(conn->env, def, "PEER_CONNECTION_CLOSED", "Connection closed during write");
   }
 
-  if (conn->poll_active) {
+  if (conn->poll_initialized) {
     uv_poll_stop(&conn->poll_handle);
     uv_close((uv_handle_t *)&conn->poll_handle, zcc_on_uv_handle_closed);
+    conn->poll_initialized = 0;
     conn->poll_active = 0;
   }
 
@@ -402,27 +422,19 @@ static void zcc_listener_poll_cb(uv_poll_t *handle, int status, int events) {
 /* ------------------------------------------------------------------------- */
 
 static void zcc_read_timeout_cb(uv_timer_t *timer) {
-  zcc_connection_t *conn = (zcc_connection_t *)timer->data;
-  if (conn == NULL || conn->is_closed || conn->pending_read == NULL) return;
+  zcc_pending_read_t *pr = (zcc_pending_read_t *)timer->data;
+  if (pr == NULL) return;
+  zcc_connection_t *conn = pr->conn;
+  if (conn == NULL || conn->is_closed || conn->pending_read != pr) return;
 
   napi_handle_scope scope;
   if (napi_open_handle_scope(conn->env, &scope) != napi_ok) return;
 
-  zcc_pending_read_t *pr = conn->pending_read;
   conn->pending_read = NULL;
 
   if (conn->poll_active) {
     uv_poll_stop(&conn->poll_handle);
     conn->poll_active = 0;
-  }
-
-  uv_timer_stop(&pr->timer);
-  uv_close((uv_handle_t *)&pr->timer, zcc_on_uv_handle_closed);
-  pr->timer_active = 0;
-
-  if (pr->payload_buf != NULL) {
-    free(pr->payload_buf);
-    pr->payload_buf = NULL;
   }
 
   /* Fail-closed: close descriptor on timeout */
@@ -434,8 +446,9 @@ static void zcc_read_timeout_cb(uv_timer_t *timer) {
 #endif
   conn->is_closed = 1;
 
-  zcc_reject_deferred(conn->env, pr->deferred, "REQUEST_DEADLINE_EXCEEDED", "Read request deadline exceeded");
-  free(pr);
+  napi_deferred def = pr->deferred;
+  zcc_free_pending_read(pr);
+  zcc_reject_deferred(conn->env, def, "REQUEST_DEADLINE_EXCEEDED", "Read request deadline exceeded");
   napi_close_handle_scope(conn->env, scope);
 }
 
@@ -451,17 +464,14 @@ static void zcc_connection_read_poll_cb(uv_poll_t *handle, int status, int event
 
   if (status < 0) {
     conn->pending_read = NULL;
-    if (pr->timer_active) {
-      uv_timer_stop(&pr->timer);
-      uv_close((uv_handle_t *)&pr->timer, zcc_on_uv_handle_closed);
-      pr->timer_active = 0;
+    if (conn->poll_active) {
+      uv_poll_stop(&conn->poll_handle);
+      conn->poll_active = 0;
     }
-    uv_poll_stop(&conn->poll_handle);
-    conn->poll_active = 0;
-    if (pr->payload_buf) free(pr->payload_buf);
+    napi_deferred def = pr->deferred;
+    zcc_free_pending_read(pr);
     zcc_internal_close_connection(conn);
-    zcc_reject_deferred(conn->env, pr->deferred, "PEER_CONNECTION_CLOSED", "Connection error during read");
-    free(pr);
+    zcc_reject_deferred(conn->env, def, "PEER_CONNECTION_CLOSED", "Connection error during read");
     napi_close_handle_scope(conn->env, scope);
     return;
   }
@@ -492,16 +502,14 @@ static void zcc_connection_read_poll_cb(uv_poll_t *handle, int status, int event
     if (len == 0 || len > MAX_REQUEST_FRAME_BYTES) {
       /* Malformed frame or frame exceeds 64KB */
       conn->pending_read = NULL;
-      if (pr->timer_active) {
-        uv_timer_stop(&pr->timer);
-        uv_close((uv_handle_t *)&pr->timer, zcc_on_uv_handle_closed);
-        pr->timer_active = 0;
+      if (conn->poll_active) {
+        uv_poll_stop(&conn->poll_handle);
+        conn->poll_active = 0;
       }
-      uv_poll_stop(&conn->poll_handle);
-      conn->poll_active = 0;
+      napi_deferred def = pr->deferred;
+      zcc_free_pending_read(pr);
       zcc_internal_close_connection(conn);
-      zcc_reject_deferred(conn->env, pr->deferred, "MALFORMED_REQUEST", "Frame length invalid or exceeds 64KB");
-      free(pr);
+      zcc_reject_deferred(conn->env, def, "MALFORMED_REQUEST", "Frame length invalid or exceeds 64KB");
       napi_close_handle_scope(conn->env, scope);
       return;
     }
@@ -510,16 +518,14 @@ static void zcc_connection_read_poll_cb(uv_poll_t *handle, int status, int event
     pr->payload_buf = (uint8_t *)malloc(len);
     if (pr->payload_buf == NULL) {
       conn->pending_read = NULL;
-      if (pr->timer_active) {
-        uv_timer_stop(&pr->timer);
-        uv_close((uv_handle_t *)&pr->timer, zcc_on_uv_handle_closed);
-        pr->timer_active = 0;
+      if (conn->poll_active) {
+        uv_poll_stop(&conn->poll_handle);
+        conn->poll_active = 0;
       }
-      uv_poll_stop(&conn->poll_handle);
-      conn->poll_active = 0;
+      napi_deferred def = pr->deferred;
+      zcc_free_pending_read(pr);
       zcc_internal_close_connection(conn);
-      zcc_reject_deferred(conn->env, pr->deferred, "INTERNAL_ADAPTER_ERROR", "Allocation failed");
-      free(pr);
+      zcc_reject_deferred(conn->env, def, "INTERNAL_ADAPTER_ERROR", "Allocation failed");
       napi_close_handle_scope(conn->env, scope);
       return;
     }
@@ -543,42 +549,38 @@ static void zcc_connection_read_poll_cb(uv_poll_t *handle, int status, int event
 
   /* 4. Complete payload received */
   conn->pending_read = NULL;
-  if (pr->timer_active) {
-    uv_timer_stop(&pr->timer);
-    uv_close((uv_handle_t *)&pr->timer, zcc_on_uv_handle_closed);
-    pr->timer_active = 0;
+  if (conn->poll_active) {
+    uv_poll_stop(&conn->poll_handle);
+    conn->poll_active = 0;
   }
-  uv_poll_stop(&conn->poll_handle);
-  conn->poll_active = 0;
 
   napi_value js_buf;
   void *dst = NULL;
-  if (napi_create_buffer_copy(conn->env, pr->expected_payload_len, pr->payload_buf, &dst, &js_buf) != napi_ok) {
+  napi_status cstat = napi_create_buffer_copy(conn->env, pr->expected_payload_len, pr->payload_buf, &dst, &js_buf);
+  napi_deferred def = pr->deferred;
+  zcc_free_pending_read(pr);
+
+  if (cstat != napi_ok) {
     zcc_internal_close_connection(conn);
-    zcc_reject_deferred(conn->env, pr->deferred, "INTERNAL_ADAPTER_ERROR", "Failed to allocate Buffer copy");
+    zcc_reject_deferred(conn->env, def, "INTERNAL_ADAPTER_ERROR", "Failed to allocate Buffer copy");
   } else {
-    (void)napi_resolve_deferred(conn->env, pr->deferred, js_buf);
+    (void)napi_resolve_deferred(conn->env, def, js_buf);
   }
 
-  free(pr->payload_buf);
-  free(pr);
   napi_close_handle_scope(conn->env, scope);
   return;
 
 fail_eof:
 fail_read:
   conn->pending_read = NULL;
-  if (pr->timer_active) {
-    uv_timer_stop(&pr->timer);
-    uv_close((uv_handle_t *)&pr->timer, zcc_on_uv_handle_closed);
-    pr->timer_active = 0;
+  if (conn->poll_active) {
+    uv_poll_stop(&conn->poll_handle);
+    conn->poll_active = 0;
   }
-  uv_poll_stop(&conn->poll_handle);
-  conn->poll_active = 0;
-  if (pr->payload_buf) free(pr->payload_buf);
+  napi_deferred def_fail = pr->deferred;
+  zcc_free_pending_read(pr);
   zcc_internal_close_connection(conn);
-  zcc_reject_deferred(conn->env, pr->deferred, "PEER_CONNECTION_CLOSED", "Connection closed during frame read");
-  free(pr);
+  zcc_reject_deferred(conn->env, def_fail, "PEER_CONNECTION_CLOSED", "Connection closed during frame read");
   napi_close_handle_scope(conn->env, scope);
 #else
   napi_close_handle_scope(conn->env, scope);
@@ -908,6 +910,7 @@ static napi_value zcc_js_read_request_frame(napi_env env, napi_callback_info inf
     return promise;
   }
 
+  pr->conn = conn;
   pr->deferred = deferred;
   pr->timeout_ms = (uint32_t)timeout_ms;
   conn->pending_read = pr;
@@ -919,32 +922,31 @@ static napi_value zcc_js_read_request_frame(napi_env env, napi_callback_info inf
     zcc_reject_deferred(env, deferred, "INTERNAL_ADAPTER_ERROR", "Timer init failed");
     return promise;
   }
-  pr->timer.data = conn;
+  pr->timer.data = pr;
   pr->timer_active = 1;
   uv_timer_start(&pr->timer, zcc_read_timeout_cb, (uint64_t)timeout_ms, 0);
 
   /* Initialize poll on connection */
-  if (!conn->poll_active) {
+  if (!conn->poll_initialized) {
     if (uv_poll_init(conn->loop, &conn->poll_handle, conn->fd) != 0) {
-      uv_timer_stop(&pr->timer);
-      uv_close((uv_handle_t *)&pr->timer, zcc_on_uv_handle_closed);
       conn->pending_read = NULL;
-      free(pr);
+      zcc_free_pending_read(pr);
       zcc_reject_deferred(env, deferred, "INTERNAL_ADAPTER_ERROR", "Poll init failed");
       return promise;
     }
     conn->poll_handle.data = conn;
+    conn->poll_initialized = 1;
   }
 
-  if (uv_poll_start(&conn->poll_handle, UV_READABLE, zcc_connection_read_poll_cb) != 0) {
-    uv_timer_stop(&pr->timer);
-    uv_close((uv_handle_t *)&pr->timer, zcc_on_uv_handle_closed);
-    conn->pending_read = NULL;
-    free(pr);
-    zcc_reject_deferred(env, deferred, "INTERNAL_ADAPTER_ERROR", "Poll start failed");
-    return promise;
+  if (!conn->poll_active) {
+    if (uv_poll_start(&conn->poll_handle, UV_READABLE, zcc_connection_read_poll_cb) != 0) {
+      conn->pending_read = NULL;
+      zcc_free_pending_read(pr);
+      zcc_reject_deferred(env, deferred, "INTERNAL_ADAPTER_ERROR", "Poll start failed");
+      return promise;
+    }
+    conn->poll_active = 1;
   }
-  conn->poll_active = 1;
 
   /* Attempt immediate read */
   zcc_connection_read_poll_cb(&conn->poll_handle, 0, UV_READABLE);
@@ -1062,7 +1064,7 @@ static napi_value zcc_js_write_response_frame(napi_env env, napi_callback_info i
   }
 
   /* Incomplete write, poll for UV_WRITABLE */
-  if (!conn->poll_active) {
+  if (!conn->poll_initialized) {
     if (uv_poll_init(conn->loop, &conn->poll_handle, conn->fd) != 0) {
       conn->pending_write = NULL;
       free(pw->buffer);
@@ -1072,17 +1074,20 @@ static napi_value zcc_js_write_response_frame(napi_env env, napi_callback_info i
       return promise;
     }
     conn->poll_handle.data = conn;
+    conn->poll_initialized = 1;
   }
 
-  if (uv_poll_start(&conn->poll_handle, UV_WRITABLE, zcc_connection_write_poll_cb) != 0) {
-    conn->pending_write = NULL;
-    free(pw->buffer);
-    free(pw);
-    zcc_internal_close_connection(conn);
-    zcc_reject_deferred(env, deferred, "INTERNAL_ADAPTER_ERROR", "Poll start failed");
-    return promise;
+  if (!conn->poll_active) {
+    if (uv_poll_start(&conn->poll_handle, UV_WRITABLE, zcc_connection_write_poll_cb) != 0) {
+      conn->pending_write = NULL;
+      free(pw->buffer);
+      free(pw);
+      zcc_internal_close_connection(conn);
+      zcc_reject_deferred(env, deferred, "INTERNAL_ADAPTER_ERROR", "Poll start failed");
+      return promise;
+    }
+    conn->poll_active = 1;
   }
-  conn->poll_active = 1;
 #else
   free(pw->buffer);
   free(pw);

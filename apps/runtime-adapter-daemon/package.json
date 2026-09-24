@@ -1,0 +1,24 @@
+{
+  "name": "@zima-control-center/runtime-adapter-daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/main.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test src/*.test.ts"
+  },
+  "dependencies": {
+    "@zima-control-center/application-registry-contracts": "0.1.0",
+    "@zima-control-center/application-runtime-contracts": "0.1.0",
+    "@zima-control-center/application-runtime-native-peer": "0.1.0",
+    "@zima-control-center/core": "0.1.0",
+    "@zima-control-center/docker-adapter": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.20.6",
+    "typescript": "^5.7.2"
+  }
+}

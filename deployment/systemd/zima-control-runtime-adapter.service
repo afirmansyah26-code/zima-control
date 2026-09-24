@@ -1,0 +1,54 @@
+[Unit]
+Description=Zima Control Center Application Runtime Adapter
+Requires=docker.service zima-control-runtime-adapter.socket
+After=docker.service zima-control-runtime-adapter.socket
+RequiresMountsFor=/var/lib/zima-control-center/registry
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=exec
+User=zcc-adapter
+Group=docker
+SupplementaryGroups=zcc-control
+UMask=0027
+WorkingDirectory=/
+ExecStart=/usr/libexec/zima-control-center/runtime-adapter-daemon
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+Restart=on-failure
+RestartSec=10s
+KillMode=control-group
+
+# Capabilities & Privileges
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Filesystem Sandboxing
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+
+# Explicit Filesystem Access
+ReadWritePaths=/run/zcc
+# Registry path configured via deployment realization (read-only)
+ReadOnlyPaths=/var/lib/zima-control-center/registry/registry.db \
+              /var/lib/zima-control-center/registry/registry.db-wal \
+              /var/lib/zima-control-center/registry/registry.db-shm
+
+# Actual Trust-Domain Path Denial
+InaccessiblePaths=/var/lib/authority-trust/db/trust.sqlite \
+                  /var/lib/authority-trust/issuer/keys \
+                  /var/lib/authority-trust/staging \
+                  /var/lib/authority-trust/quarantine \
+                  /run/authority-runtime-bootstrap
+
+# Network Sandboxing
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any

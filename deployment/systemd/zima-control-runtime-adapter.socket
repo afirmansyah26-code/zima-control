@@ -1,0 +1,17 @@
+[Unit]
+Description=Zima Control Center Application Runtime Adapter Socket
+Before=zima-control-runtime-adapter.service
+
+[Socket]
+ExecStartPre=/usr/libexec/zima-control-center/verify-runtime-directory
+ListenStream=/run/zcc/application-runtime.sock
+SocketUser=zcc-adapter
+SocketGroup=zcc-control
+SocketMode=0660
+DirectoryMode=0755
+Backlog=128
+RemoveOnStop=no
+Service=zima-control-runtime-adapter.service
+
+[Install]
+WantedBy=sockets.target

@@ -59,6 +59,7 @@ typedef struct zcc_listener {
 } zcc_listener_t;
 
 typedef struct zcc_pending_read {
+  struct zcc_connection *conn;
   napi_deferred deferred;
   uint32_t timeout_ms;
   uv_timer_t timer;
@@ -85,6 +86,7 @@ typedef struct zcc_connection {
   char connection_id[64];
   zcc_peer_credentials_t credentials;
   uv_poll_t poll_handle;
+  int poll_initialized;
   int poll_active;
   uv_loop_t *loop;
   napi_env env;
