@@ -17,12 +17,13 @@
     "start": "node dist/start.js",
     "auth:bootstrap": "node dist/bootstrap.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "tsx --test src/application.test.ts src/runtime.test.ts src/auth.test.ts src/auth-prisma.test.ts src/mutation.test.ts src/mutation-status-service.test.ts src/mutation-status-http.test.ts src/provision.test.ts"
+    "test": "tsx --test src/application.test.ts src/runtime.test.ts src/auth.test.ts src/auth-prisma.test.ts src/mutation.test.ts src/mutation-status-service.test.ts src/mutation-status-http.test.ts src/provision.test.ts src/gateway-mutation.test.ts src/runtime-live-http.test.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
     "@prisma/client": "^6.19.0",
     "@zima-control-center/application-registry-contracts": "0.1.0",
+    "@zima-control-center/application-runtime-client": "0.1.0",
     "@zima-control-center/core": "0.1.0",
     "hono": "^4.13.5"
   }

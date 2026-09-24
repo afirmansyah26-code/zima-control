@@ -1,9 +1,13 @@
 export { createApplicationRegistryApi } from "./application.js";
 export {
   ApplicationMutationServiceError,
+  GatewayApplicationMutationService,
   OrchestratedApplicationMutationService,
   publicMutationErrorMessage,
   toPublicMutationResponse,
+} from "./mutation-service.js";
+export type {
+  GatewayApplicationMutationServiceOptions,
 } from "./mutation-service.js";
 export type {
   ApplicationMutationService,

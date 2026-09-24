@@ -6,6 +6,7 @@ import {
   validateProductionSqliteDatabaseUrl,
   type RegistryReadRepository,
 } from "@zima-control-center/core";
+import { ApplicationRuntimeGateway } from "@zima-control-center/application-runtime-client";
 import type { Hono } from "hono";
 import { createApplicationRegistryApi } from "./application.js";
 import {
@@ -15,6 +16,10 @@ import { PrismaAuthRepository } from "./auth/prisma-auth-repository.js";
 import type { AuthenticationBoundary } from "./auth/http.js";
 import { DurableApplicationMutationStatusReadService } from "./mutation-status-service.js";
 import type { ApplicationMutationStatusReadService } from "./mutation-status-service.js";
+import {
+  GatewayApplicationMutationService,
+  type ApplicationMutationService,
+} from "./mutation-service.js";
 
 export interface EnvironmentSource {
   readonly [name: string]: string | undefined;
@@ -27,12 +32,14 @@ export interface ApiRuntimeConfig {
   authCookieSecure: boolean;
   trustForwardedProto: boolean;
   mutationCapabilityMode: ProductionCapabilityMode;
+  runtimeSocketPath?: string;
 }
 
 export const productionCapabilityModes = [
   "DISABLED",
   "STATUS_ONLY",
   "DOCKER_SINGLE_CONTAINER",
+  "RUNTIME_ADAPTER",
 ] as const;
 
 export type ProductionCapabilityMode = (typeof productionCapabilityModes)[number];
@@ -52,6 +59,7 @@ export interface ProductionCapabilityReadinessInputs {
   startupRecoveryComplete?: boolean;
   executorVerifier?: boolean;
   admissionControl?: boolean;
+  runtimeAdapter?: boolean;
 }
 
 export type ProductionCapabilityProbe = () => boolean | Promise<boolean>;
@@ -65,6 +73,7 @@ export interface ProductionCapabilityReadinessProbes {
   startupRecoveryComplete?: ProductionCapabilityProbe;
   executorVerifier?: ProductionCapabilityProbe;
   admissionControl?: ProductionCapabilityProbe;
+  runtimeAdapter?: ProductionCapabilityProbe;
 }
 
 export type ApiRuntimeConfigErrorCode =
@@ -135,6 +144,11 @@ export function readApiRuntimeConfig(environment: EnvironmentSource): ApiRuntime
     environment.MUTATION_CAPABILITY_MODE,
   );
 
+  const rawSocketPath = environment.APPLICATION_RUNTIME_SOCKET_PATH?.trim();
+  const runtimeSocketPath = rawSocketPath && rawSocketPath.length > 0
+    ? rawSocketPath
+    : "/run/zcc/application-runtime.sock";
+
   return {
     host,
     port,
@@ -142,6 +156,7 @@ export function readApiRuntimeConfig(environment: EnvironmentSource): ApiRuntime
     authCookieSecure,
     trustForwardedProto,
     mutationCapabilityMode,
+    runtimeSocketPath,
   };
 }
 
@@ -161,6 +176,11 @@ export function evaluateProductionCapabilityReadiness(
         : "NOT_READY";
     case "DOCKER_SINGLE_CONTAINER":
       return mutationCapabilityGateNames.every((gate) => inputs[gate] === true)
+        ? "MUTATION_READY"
+        : "NOT_READY";
+    case "RUNTIME_ADAPTER":
+      return inputs.runtimeAdapter === true
+        && inputs.persistentDatabasePolicy === true
         ? "MUTATION_READY"
         : "NOT_READY";
   }
@@ -184,6 +204,14 @@ export async function probeProductionCapabilityReadiness(
     );
     return mutationStatus && persistentDatabasePolicy ? "STATUS_ONLY" : "NOT_READY";
   }
+  if (mode === "RUNTIME_ADAPTER") {
+    const runtimeAdapter = await probeIsHealthy(probes.runtimeAdapter);
+    if (!runtimeAdapter) return "NOT_READY";
+    const persistentDatabasePolicy = await probeIsHealthy(
+      probes.persistentDatabasePolicy,
+    );
+    return runtimeAdapter && persistentDatabasePolicy ? "MUTATION_READY" : "NOT_READY";
+  }
 
   const inputs: ProductionCapabilityReadinessInputs = {};
   for (const gate of mutationCapabilityGateNames) {
@@ -200,10 +228,12 @@ export function composeApplicationRegistryApi(
   auth?: AuthenticationBoundary,
   trustForwardedProto = false,
   mutationStatus?: ApplicationMutationStatusReadService,
+  mutation?: ApplicationMutationService,
+  runtimeGateway?: ApplicationRuntimeGateway,
 ): Hono {
   return createApplicationRegistryApi(
     new ApplicationRegistryService(repository),
-    { readiness, auth, trustForwardedProto, mutationStatus },
+    { readiness, auth, trustForwardedProto, mutationStatus, mutation, runtimeGateway },
   );
 }
 
@@ -228,17 +258,34 @@ export function composeApiRuntimeWithPrisma(
     new PrismaAuthRepository(prisma),
     { secureCookies: config.authCookieSecure },
   );
-  const mutationStatus = config.mutationCapabilityMode === "STATUS_ONLY"
-    ? new DurableApplicationMutationStatusReadService(
-      new PrismaDurableMutationRepository(prisma),
-    )
+
+  const isRuntimeAdapter = config.mutationCapabilityMode === "RUNTIME_ADAPTER";
+  const runtimeGateway = isRuntimeAdapter
+    ? new ApplicationRuntimeGateway({ socketPath: config.runtimeSocketPath })
     : undefined;
+
+  const mutationRepo = (config.mutationCapabilityMode === "STATUS_ONLY" || isRuntimeAdapter)
+    ? new PrismaDurableMutationRepository(prisma)
+    : undefined;
+
+  const mutationStatus = mutationRepo
+    ? new DurableApplicationMutationStatusReadService(mutationRepo)
+    : undefined;
+
+  const mutation = (isRuntimeAdapter && runtimeGateway && mutationRepo)
+    ? new GatewayApplicationMutationService({
+      gateway: runtimeGateway,
+      registry: repository,
+      repository: mutationRepo,
+    })
+    : undefined;
+
   const app = composeApplicationRegistryApi(repository, async () => {
     try {
       // Validate the server-owned persistence boundary before any status-mode
       // database probe. Normal production construction already validates this
       // in readApiRuntimeConfig; retaining it here keeps this seam fail-closed.
-      if (config.mutationCapabilityMode === "STATUS_ONLY") {
+      if (config.mutationCapabilityMode === "STATUS_ONLY" || isRuntimeAdapter) {
         validateProductionSqliteDatabaseUrl(config.databaseUrl);
       }
       // A connectivity-only probe would report an empty, unprovisioned SQLite
@@ -257,13 +304,17 @@ export function composeApiRuntimeWithPrisma(
             validateProductionSqliteDatabaseUrl(config.databaseUrl);
             return true;
           },
+          runtimeAdapter: async () => {
+            if (!runtimeGateway) return false;
+            return true;
+          },
         },
       );
       return readiness !== "NOT_READY";
     } catch {
       return false;
     }
-  }, authentication, config.trustForwardedProto, mutationStatus);
+  }, authentication, config.trustForwardedProto, mutationStatus, mutation, runtimeGateway);
 
   return {
     app,

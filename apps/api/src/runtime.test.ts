@@ -23,6 +23,7 @@ test("API runtime configuration validates required server-only values", () => {
     authCookieSecure: false,
     trustForwardedProto: false,
     mutationCapabilityMode: "DISABLED",
+    runtimeSocketPath: "/run/zcc/application-runtime.sock",
   });
   assert.equal(
     readApiRuntimeConfig({ DATABASE_URL: "file:/data/registry.db", NODE_ENV: "production" }).authCookieSecure,
@@ -51,6 +52,14 @@ test("API runtime configuration validates required server-only values", () => {
   assert.equal(
     readApiRuntimeConfig({ DATABASE_URL: "file:test.db", MUTATION_CAPABILITY_MODE: "DOCKER_SINGLE_CONTAINER" }).mutationCapabilityMode,
     "DOCKER_SINGLE_CONTAINER",
+  );
+  assert.equal(
+    readApiRuntimeConfig({ DATABASE_URL: "file:test.db", MUTATION_CAPABILITY_MODE: "RUNTIME_ADAPTER" }).mutationCapabilityMode,
+    "RUNTIME_ADAPTER",
+  );
+  assert.equal(
+    readApiRuntimeConfig({ DATABASE_URL: "file:test.db", APPLICATION_RUNTIME_SOCKET_PATH: "/custom/zcc.sock" }).runtimeSocketPath,
+    "/custom/zcc.sock",
   );
   assert.equal(
     readApiRuntimeConfig({ DATABASE_URL: "file:test.db", DOCKER_SOCKET_PATH: "/unexpected/socket" }).mutationCapabilityMode,
@@ -92,7 +101,7 @@ test("API runtime configuration validates required server-only values", () => {
     () => readApiRuntimeConfig({ DATABASE_URL: "file:test.db", TRUST_FORWARDED_PROTO: "maybe" }),
     (error) => error instanceof ApiRuntimeConfigError && error.code === "INVALID_PROXY_SETTING",
   );
-  for (const value of ["disabled", "status_only", "docker_single_container", " DISABLED ", "UNKNOWN"]) {
+  for (const value of ["disabled", "status_only", "docker_single_container", "runtime_adapter", " DISABLED ", "UNKNOWN"]) {
     assert.throws(
       () => readApiRuntimeConfig({ DATABASE_URL: "file:test.db", MUTATION_CAPABILITY_MODE: value }),
       (error) => error instanceof ApiRuntimeConfigError

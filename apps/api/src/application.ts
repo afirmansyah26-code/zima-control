@@ -41,6 +41,10 @@ import {
   ApplicationMutationStatusReadServiceError,
   type ApplicationMutationStatusReadService,
 } from "./mutation-status-service.js";
+import {
+  ApplicationRuntimeClientError,
+  type ApplicationRuntimeGateway,
+} from "@zima-control-center/application-runtime-client";
 
 export type ApplicationRegistryReadService = Pick<
   ApplicationRegistryService,
@@ -58,6 +62,7 @@ export interface ApplicationRegistryApiOptions {
   trustForwardedProto?: boolean;
   mutation?: ApplicationMutationService;
   mutationStatus?: ApplicationMutationStatusReadService;
+  runtimeGateway?: ApplicationRuntimeGateway;
 }
 
 /**
@@ -136,8 +141,22 @@ export function createApplicationRegistryApi(
   });
 
   app.get("/api/applications/:id/runtime", async (context) => {
+    const isLive = context.req.query("live") === "true";
+    if (isLive) {
+      if (!options.runtimeGateway) {
+        return context.json(errorResponse("TARGET_UNAVAILABLE", "Runtime adapter is not configured"), 503);
+      }
+      return handleLiveRuntime(context, context.req.param("id"), service, options.runtimeGateway);
+    }
     const runtime = await service.getRuntimeContainers(context.req.param("id"));
     return context.json(runtime.map(toRuntimeResponse));
+  });
+
+  app.get("/api/applications/:id/runtime/live", async (context) => {
+    if (!options.runtimeGateway) {
+      return context.json(errorResponse("TARGET_UNAVAILABLE", "Runtime adapter is not configured"), 503);
+    }
+    return handleLiveRuntime(context, context.req.param("id"), service, options.runtimeGateway);
   });
 
   app.get("/api/applications/:id/environment", async (context) => {
@@ -345,4 +364,68 @@ function errorResponse(
   message: string,
 ): ApiErrorResponse {
   return { error: { code, message } };
+}
+
+async function handleLiveRuntime(
+  context: Context,
+  id: string,
+  service: ApplicationRegistryReadService,
+  gateway: ApplicationRuntimeGateway,
+): Promise<Response> {
+  let detail: ApplicationDetail;
+  try {
+    detail = await service.getApplicationDetail(id);
+  } catch (error) {
+    if (error instanceof ApplicationRegistryServiceError) {
+      if (error.code === "APPLICATION_NOT_FOUND") {
+        return context.json(errorResponse("APPLICATION_NOT_FOUND", "Application not found"), 404);
+      }
+    }
+    return context.json(errorResponse("INTERNAL_ERROR", "Internal server error"), 500);
+  }
+
+  const deployment = await service.getCurrentDeployment(id);
+  if (!deployment) {
+    return context.json(errorResponse("TARGET_UNAVAILABLE", "No active deployment found for application"), 404);
+  }
+
+  try {
+    const liveResponse = await gateway.inspectApplication({
+      applicationId: id,
+      deploymentId: deployment.id,
+    });
+
+    if (liveResponse.outcome !== "SUCCEEDED" || !liveResponse.observed) {
+      const adapterCode = liveResponse.errorCode;
+      if (adapterCode === "APPLICATION_NOT_FOUND" || adapterCode === "DEPLOYMENT_NOT_FOUND") {
+        return context.json(errorResponse("APPLICATION_NOT_FOUND", "Application not found in runtime"), 404);
+      }
+      return context.json(errorResponse("TARGET_UNAVAILABLE", "Live runtime observation unavailable"), 503);
+    }
+
+    const observed = liveResponse.observed;
+    return context.json({
+      applicationId: detail.application.id,
+      deploymentId: deployment.id,
+      observedRevision: liveResponse.deploymentRevision ?? observed.deploymentId ?? deployment.id,
+      executionState: liveResponse.normalizedState,
+      healthState: liveResponse.normalizedState === "RUNNING" ? "HEALTHY" : liveResponse.normalizedState,
+      observedAt: observed.observedAt,
+      containers: observed.containers.map((container) => ({
+        serviceName: container.serviceName,
+        containerId: container.containerId,
+        state: container.status,
+        status: container.status,
+        health: container.health?.status ?? "UNKNOWN",
+      })),
+    });
+  } catch (error) {
+    if (error instanceof ApplicationRuntimeClientError) {
+      if (error.code === "APPLICATION_NOT_FOUND" || error.code === "DEPLOYMENT_NOT_FOUND") {
+        return context.json(errorResponse("APPLICATION_NOT_FOUND", "Application not found in runtime"), 404);
+      }
+      return context.json(errorResponse("TARGET_UNAVAILABLE", "Runtime adapter is unavailable"), 503);
+    }
+    return context.json(errorResponse("INTERNAL_ERROR", "Internal server error"), 500);
+  }
 }
