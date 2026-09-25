@@ -3,9 +3,12 @@ import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import type { DiscoveryResult } from "@zima-control-center/core";
 import {
+  DEFAULT_OBSERVATION_INTERVAL_MS,
   createWorkerRuntime,
   readWorkerRuntimeConfig,
+  runWorkerCycle,
   runWorkerOnce,
+  startWorkerLoop,
   WorkerRuntimeConfigError,
   type WorkerLogEvent,
   type WorkerRuntime,
@@ -319,4 +322,57 @@ test("runWorkerOnce skips runtime observation when no active deployment exists",
   assert.equal(statusCalls, 0);
   assert.equal(events.length, 1);
   assert.equal(events[0].event, "worker_discovery_completed");
+});
+
+test("worker config accepts valid OBSERVATION_INTERVAL_MS and rejects invalid", () => {
+  const config = readWorkerRuntimeConfig({
+    DATABASE_URL: "file:/data/registry.db",
+    ZIMAOS_BASE_URL: "https://zima.example.test",
+    OBSERVATION_INTERVAL_MS: "15000",
+  });
+  assert.equal(config.observationIntervalMs, 15000);
+
+  assert.throws(() => readWorkerRuntimeConfig({
+    DATABASE_URL: "file:/data/registry.db",
+    ZIMAOS_BASE_URL: "https://zima.example.test",
+    OBSERVATION_INTERVAL_MS: "500", // below minimum 1000ms
+  }), (error) => error instanceof WorkerRuntimeConfigError && error.code === "INVALID_OBSERVATION_INTERVAL");
+
+  assert.throws(() => readWorkerRuntimeConfig({
+    DATABASE_URL: "file:/data/registry.db",
+    ZIMAOS_BASE_URL: "https://zima.example.test",
+    OBSERVATION_INTERVAL_MS: "invalid",
+  }), (error) => error instanceof WorkerRuntimeConfigError && error.code === "INVALID_OBSERVATION_INTERVAL");
+});
+
+test("startWorkerLoop runs initial cycle and stops cleanly on stop()", async () => {
+  let cycles = 0;
+  let disconnected = false;
+  const events: WorkerLogEvent[] = [];
+
+  const runtime: WorkerRuntime = {
+    discovery: {
+      discover: async () => {
+        cycles++;
+        return { discovered: [], failures: [] };
+      },
+    },
+    gateway: {} as any,
+    getActiveDeployments: async () => [],
+    observeApplicationStatus: async () => ({} as any),
+    observeApplicationInspection: async () => ({} as any),
+    disconnect: async () => { disconnected = true; },
+  };
+
+  const handle = startWorkerLoop(runtime, 50, (e) => events.push(e));
+  assert.equal(handle.isRunning(), true);
+
+  // Allow initial cycle to run
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(cycles >= 1);
+
+  await handle.stop();
+  assert.equal(handle.isRunning(), false);
+  assert.equal(disconnected, true);
+  assert.ok(events.some((e) => e.event === "worker_stopped"));
 });

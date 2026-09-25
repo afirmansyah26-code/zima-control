@@ -8,7 +8,11 @@ COPY apps/web/package.json apps/web/package.json
 COPY apps/trust-provisioner/package.json apps/trust-provisioner/package.json
 COPY apps/runtime-authority/package.json apps/runtime-authority/package.json
 COPY apps/runtime-issuer/package.json apps/runtime-issuer/package.json
+COPY apps/runtime-adapter-daemon/package.json apps/runtime-adapter-daemon/package.json
 COPY packages/application-registry-contracts/package.json packages/application-registry-contracts/package.json
+COPY packages/application-runtime-contracts/package.json packages/application-runtime-contracts/package.json
+COPY packages/application-runtime-native-peer/package.json packages/application-runtime-native-peer/package.json
+COPY packages/application-runtime-client/package.json packages/application-runtime-client/package.json
 COPY packages/core/package.json packages/core/package.json
 COPY packages/runtime-trust-contracts/package.json packages/runtime-trust-contracts/package.json
 COPY packages/runtime-trust-authority/package.json packages/runtime-trust-authority/package.json
@@ -21,11 +25,19 @@ COPY packages/docker-adapter/package.json packages/docker-adapter/package.json
 COPY packages/zimaos-adapter/package.json packages/zimaos-adapter/package.json
 COPY prisma/schema.prisma prisma/schema.prisma
 RUN npm ci
-COPY apps/worker apps/worker
+
+COPY packages/application-registry-contracts packages/application-registry-contracts
+COPY packages/application-runtime-contracts packages/application-runtime-contracts
+COPY packages/application-runtime-client packages/application-runtime-client
 COPY packages/core packages/core
 COPY packages/zimaos-adapter packages/zimaos-adapter
+COPY apps/worker apps/worker
+
 RUN npx prisma generate
-RUN npm run build --workspace=@zima-control-center/core \
+RUN npm run build --workspace=@zima-control-center/application-registry-contracts \
+    && npm run build --workspace=@zima-control-center/application-runtime-contracts \
+    && npm run build --workspace=@zima-control-center/application-runtime-client \
+    && npm run build --workspace=@zima-control-center/core \
     && npm run build --workspace=@zima-control-center/zimaos-adapter \
     && npm run build --workspace=@zima-control-center/worker
 RUN npm prune --omit=dev --omit=optional
@@ -33,13 +45,25 @@ RUN npm prune --omit=dev --omit=optional
 FROM node:22-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
+
+RUN mkdir -p /data /run/zcc && chown -R node:node /data /run/zcc
+
 COPY --from=build --chown=node:node /workspace/node_modules ./node_modules
 COPY --from=build --chown=node:node /workspace/package.json ./package.json
 COPY --from=build --chown=node:node /workspace/apps/worker/package.json ./apps/worker/package.json
 COPY --from=build --chown=node:node /workspace/apps/worker/dist ./apps/worker/dist
 COPY --from=build --chown=node:node /workspace/packages/core/package.json ./packages/core/package.json
 COPY --from=build --chown=node:node /workspace/packages/core/dist ./packages/core/dist
+COPY --from=build --chown=node:node /workspace/packages/application-registry-contracts/package.json ./packages/application-registry-contracts/package.json
+COPY --from=build --chown=node:node /workspace/packages/application-registry-contracts/dist ./packages/application-registry-contracts/dist
+COPY --from=build --chown=node:node /workspace/packages/application-runtime-contracts/package.json ./packages/application-runtime-contracts/package.json
+COPY --from=build --chown=node:node /workspace/packages/application-runtime-contracts/dist ./packages/application-runtime-contracts/dist
+COPY --from=build --chown=node:node /workspace/packages/application-runtime-client/package.json ./packages/application-runtime-client/package.json
+COPY --from=build --chown=node:node /workspace/packages/application-runtime-client/dist ./packages/application-runtime-client/dist
 COPY --from=build --chown=node:node /workspace/packages/zimaos-adapter/package.json ./packages/zimaos-adapter/package.json
 COPY --from=build --chown=node:node /workspace/packages/zimaos-adapter/dist ./packages/zimaos-adapter/dist
+
 USER node
+VOLUME /data
+
 CMD ["node", "apps/worker/dist/start.js"]

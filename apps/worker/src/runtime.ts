@@ -14,17 +14,21 @@ export interface EnvironmentSource {
   readonly [name: string]: string | undefined;
 }
 
+export const DEFAULT_OBSERVATION_INTERVAL_MS = 30_000;
+
 export interface WorkerRuntimeConfig {
   databaseUrl: string;
   zimaosBaseUrl: string;
   runtimeSocketPath: string;
+  observationIntervalMs?: number;
 }
 
 export type WorkerRuntimeConfigErrorCode =
   | "MISSING_DATABASE_URL"
   | "INVALID_DATABASE_URL"
   | "MISSING_ZIMAOS_BASE_URL"
-  | "INVALID_ZIMAOS_BASE_URL";
+  | "INVALID_ZIMAOS_BASE_URL"
+  | "INVALID_OBSERVATION_INTERVAL";
 
 export class WorkerRuntimeConfigError extends Error {
   public constructor(public readonly code: WorkerRuntimeConfigErrorCode) {
@@ -100,10 +104,21 @@ export function readWorkerRuntimeConfig(environment: EnvironmentSource): WorkerR
     ? rawSocketPath
     : "/run/zcc/application-runtime.sock";
 
+  const rawInterval = environment.OBSERVATION_INTERVAL_MS?.trim();
+  let observationIntervalMs: number | undefined;
+  if (rawInterval !== undefined && rawInterval.length > 0) {
+    const parsed = Number(rawInterval);
+    if (!Number.isSafeInteger(parsed) || parsed < 1000) {
+      throw new WorkerRuntimeConfigError("INVALID_OBSERVATION_INTERVAL");
+    }
+    observationIntervalMs = parsed;
+  }
+
   return {
     databaseUrl,
     zimaosBaseUrl: `${baseUrl.origin}${baseUrl.pathname.replace(/\/$/, "")}`,
     runtimeSocketPath,
+    ...(observationIntervalMs !== undefined ? { observationIntervalMs } : {}),
   };
 }
 
@@ -203,26 +218,97 @@ async function reconcileAuthoritativeRuntimeObservations(
   });
 }
 
+export async function runWorkerCycle(
+  runtime: WorkerRuntime,
+  log: (event: WorkerLogEvent) => void = () => undefined,
+): Promise<DiscoveryResult> {
+  const result = await runtime.discovery.discover();
+  log({
+    level: result.failures.length > 0 ? "error" : "info",
+    event: "worker_discovery_completed",
+    ...(result.failures.length > 0 ? { errorCode: "DISCOVERY_PARTIAL_FAILURE" } : {}),
+    discoveredCount: result.discovered.length,
+    failureCount: result.failures.length,
+  });
+
+  await reconcileAuthoritativeRuntimeObservations(runtime, result, log);
+
+  return result;
+}
+
 export async function runWorkerOnce(
   runtime: WorkerRuntime,
   log: (event: WorkerLogEvent) => void = () => undefined,
 ): Promise<DiscoveryResult> {
   try {
-    const result = await runtime.discovery.discover();
-    log({
-      level: result.failures.length > 0 ? "error" : "info",
-      event: "worker_discovery_completed",
-      ...(result.failures.length > 0 ? { errorCode: "DISCOVERY_PARTIAL_FAILURE" } : {}),
-      discoveredCount: result.discovered.length,
-      failureCount: result.failures.length,
-    });
-
-    await reconcileAuthoritativeRuntimeObservations(runtime, result, log);
-
-    return result;
+    return await runWorkerCycle(runtime, log);
   } finally {
     await runtime.disconnect();
   }
+}
+
+export interface WorkerLoopHandle {
+  readonly isRunning: () => boolean;
+  stop(): Promise<void>;
+}
+
+export function startWorkerLoop(
+  runtime: WorkerRuntime,
+  intervalMs: number = DEFAULT_OBSERVATION_INTERVAL_MS,
+  log: (event: WorkerLogEvent) => void = () => undefined,
+): WorkerLoopHandle {
+  let running = true;
+  let inProgress = false;
+  let timer: NodeJS.Timeout | null = null;
+  let currentCyclePromise: Promise<void> | null = null;
+
+  const executeCycle = async (): Promise<void> => {
+    if (!running || inProgress) return;
+    inProgress = true;
+    try {
+      currentCyclePromise = runWorkerCycle(runtime, log).then(() => undefined);
+      await currentCyclePromise;
+    } catch {
+      log({
+        level: "error",
+        event: "worker_cycle_failed",
+        errorCode: "OBSERVATION_CYCLE_FAILURE",
+      });
+    } finally {
+      currentCyclePromise = null;
+      inProgress = false;
+      if (running) {
+        timer = setTimeout(() => {
+          void executeCycle();
+        }, intervalMs);
+        if (typeof timer.unref === "function") {
+          timer.unref();
+        }
+      }
+    }
+  };
+
+  void executeCycle();
+
+  return {
+    isRunning: () => running,
+    async stop(): Promise<void> {
+      if (!running) return;
+      running = false;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (currentCyclePromise !== null) {
+        await currentCyclePromise.catch(() => undefined);
+      }
+      await runtime.disconnect();
+      log({
+        level: "info",
+        event: "worker_stopped",
+      });
+    },
+  };
 }
 
 function containsControlCharacter(value: string): boolean {

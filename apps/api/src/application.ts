@@ -83,8 +83,9 @@ export function createApplicationRegistryApi(
   });
 
   app.get("/health", (context) => context.json({ status: "ok", service: "api" }));
+  app.get("/api/health", (context) => context.json({ status: "ok", service: "api" }));
 
-  app.get("/ready", async (context) => {
+  const handleReadiness = async (context: Context) => {
     try {
       const ready = await (options.readiness?.() ?? Promise.resolve(true));
       return ready
@@ -93,7 +94,9 @@ export function createApplicationRegistryApi(
     } catch {
       return context.json({ status: "not_ready", service: "api" }, 503);
     }
-  });
+  };
+  app.get("/ready", handleReadiness);
+  app.get("/api/ready", handleReadiness);
 
   if (options.auth) {
     const authOptions: AuthenticationRouteOptions = {

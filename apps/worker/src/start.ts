@@ -1,11 +1,14 @@
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  DEFAULT_OBSERVATION_INTERVAL_MS,
   createWorkerRuntime,
   readWorkerRuntimeConfig,
   runWorkerOnce,
+  startWorkerLoop,
   type EnvironmentSource,
   type WorkerLogEvent,
+  type WorkerLoopHandle,
   type WorkerRuntime,
   type WorkerRuntimeConfig,
   WorkerRuntimeConfigError,
@@ -13,13 +16,43 @@ import {
 
 export type WorkerRuntimeFactory = (config: WorkerRuntimeConfig) => WorkerRuntime;
 
+export interface WorkerProcessHandle {
+  stop(): Promise<void>;
+}
+
 export async function runWorkerProcess(
   environment: EnvironmentSource = process.env,
   runtimeFactory: WorkerRuntimeFactory = createWorkerRuntime,
 ): Promise<boolean> {
   try {
     const config = readWorkerRuntimeConfig(environment);
-    await runWorkerOnce(runtimeFactory(config), writeSafeLog);
+    const runOnce = environment.RUN_ONCE === "true" || environment.WORKER_RUN_MODE === "once";
+    if (runOnce) {
+      await runWorkerOnce(runtimeFactory(config), writeSafeLog);
+      return true;
+    }
+
+    const runtime = runtimeFactory(config);
+    writeSafeLog({ level: "info", event: "worker_started" });
+    const intervalMs = config.observationIntervalMs ?? DEFAULT_OBSERVATION_INTERVAL_MS;
+    const loop = startWorkerLoop(runtime, intervalMs, writeSafeLog);
+
+    const shutdown = async () => {
+      try {
+        await loop.stop();
+      } catch {
+        writeSafeLog({
+          level: "error",
+          event: "worker_shutdown_failed",
+          errorCode: "SHUTDOWN_FAILURE",
+        });
+        process.exitCode = 1;
+      }
+    };
+
+    process.once("SIGINT", () => { void shutdown(); });
+    process.once("SIGTERM", () => { void shutdown(); });
+
     return true;
   } catch (error) {
     writeSafeLog({
