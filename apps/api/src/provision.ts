@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { PrismaClient } from "@prisma/client";
 import { validateProductionSqliteDatabaseUrl } from "@zima-control-center/core";
 
 export interface ProvisionEnvironment {
@@ -46,6 +48,28 @@ export async function provisionProductionDatabase(
     databaseUrl = validateProductionSqliteDatabaseUrl(rawDatabaseUrl).databaseUrl;
   } catch {
     return { ok: false, errorCode: "INVALID_CONFIGURATION" };
+  }
+
+  // Preflight check: Ensure an un-cutover legacy trust database cannot be provisioned
+  // by normal API provisioning. If AuthorityIssuer or AuthoritySigningKey exist in sqlite_master,
+  // fail closed immediately before running migrations.
+  try {
+    const filePath = databaseUrl.replace(/^file:/, "").split("?")[0];
+    if (filePath && existsSync(filePath)) {
+      const client = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+      try {
+        const legacyTables = await client.$queryRawUnsafe<Array<{ name: string }>>(
+          `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('AuthorityIssuer', 'AuthoritySigningKey')`,
+        );
+        if (legacyTables.length > 0) {
+          return { ok: false, errorCode: "MIGRATION_FAILED" };
+        }
+      } finally {
+        await client.$disconnect();
+      }
+    }
+  } catch {
+    return { ok: false, errorCode: "MIGRATION_FAILED" };
   }
 
   try {

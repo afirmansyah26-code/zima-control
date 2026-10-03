@@ -30,6 +30,14 @@ test("API runtime configuration validates required server-only values", () => {
     true,
   );
   assert.equal(
+    readApiRuntimeConfig({ DATABASE_URL: "file:/data/registry.db", NODE_ENV: "production", AUTH_COOKIE_SECURE: "false" }).authCookieSecure,
+    false,
+  );
+  assert.equal(
+    readApiRuntimeConfig({ DATABASE_URL: "file:test.db", AUTH_COOKIE_SECURE: "true" }).authCookieSecure,
+    true,
+  );
+  assert.equal(
     readApiRuntimeConfig({ DATABASE_URL: "file:test.db", TRUST_FORWARDED_PROTO: "true" }).trustForwardedProto,
     true,
   );

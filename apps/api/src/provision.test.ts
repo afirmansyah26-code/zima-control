@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
@@ -45,11 +45,7 @@ test("Prisma provisioning creates the frozen schema and reruns as a no-op", asyn
       "AuthorityAuditEvent",
       "AuthorityDeployment",
       "AuthorityIntent",
-      "AuthorityIssuer",
       "AuthorityService",
-      "AuthoritySigningKey",
-      "AuthorityTrustAuditEvent",
-      "AuthorityTrustOperation",
       "DeploymentNetwork",
       "DeploymentPort",
       "DeploymentVolume",
@@ -63,20 +59,11 @@ test("Prisma provisioning creates the frozen schema and reruns as a no-op", asyn
       "RuntimeContainer",
       "Session",
     ].sort());
-    const trustIndexes = await prisma.$queryRawUnsafe<Array<{ name: string }>>(
-      `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name IN ('AuthorityIssuer','AuthoritySigningKey','AuthorityTrustOperation','AuthorityTrustAuditEvent')`,
+    const trustTables = await prisma.$queryRawUnsafe<Array<{ name: string }>>(
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('AuthorityIssuer','AuthoritySigningKey','AuthorityTrustOperation','AuthorityTrustAuditEvent')`,
     );
-    assert.ok(trustIndexes.some((index) => index.name === "AuthoritySigningKey_one_active_per_issuer"));
-    const trustTriggers = await prisma.$queryRawUnsafe<Array<{ name: string }>>(
-      `SELECT name FROM sqlite_master WHERE type = 'trigger'`,
-    );
-    assert.deepEqual(trustTriggers.map((trigger) => trigger.name).sort(), [
-      "AuthoritySigningKey_identity_immutable",
-      "AuthoritySigningKey_no_delete",
-      "AuthorityTrustAuditEvent_no_delete",
-      "AuthorityTrustAuditEvent_no_update",
-    ]);
-    assert.equal(await migrationCount(prisma), 4);
+    assert.equal(trustTables.length, 0);
+    assert.equal(await migrationCount(prisma), 3);
 
     await prisma.$disconnect();
     prisma = undefined;
@@ -118,7 +105,7 @@ test("trust migration backfills the normalized issuer as UNINITIALIZED without c
       authorityId, "PRIMARY", issuerId, 0, timestamp, timestamp,
     );
     const trustMigration = "20260909120000_trust_persistence_foundation";
-    await executeSqliteMigration(prisma, join(sourcePrisma, "migrations", trustMigration, "migration.sql"));
+    await executeSqliteMigration(prisma, join(sourcePrisma, "cutover", "migrations", trustMigration, "migration.sql"));
     const [issuer] = await prisma.$queryRawUnsafe<Array<{
       authorityId: string; trustStatus: string; stateVersion: number; trustAuditSequence: number;
       activeKeyId: string | null; pendingKeyId: string | null; currentOperationId: string | null;
@@ -328,6 +315,47 @@ test("API, worker, and bootstrap contain no independent migration owner", async 
       assert.doesNotMatch(script, /migrate\s+deploy|db:provision/);
     }
   }
+});
+
+test("API provisioning fails closed on un-cutover legacy database containing trust tables", async () => {
+  const temporaryRoot = `/data/test-legacy-${randomUUID()}`;
+  await mkdir(temporaryRoot, { recursive: true });
+  const databasePath = `${temporaryRoot}/legacy.db`;
+  const databaseUrl = `file:${databasePath}`;
+  let client: PrismaClient | undefined;
+  try {
+    client = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
+    await client.$executeRawUnsafe(`CREATE TABLE "Authority" ("id" TEXT NOT NULL PRIMARY KEY, "installationKey" TEXT NOT NULL DEFAULT 'PRIMARY')`);
+    await client.$executeRawUnsafe(`CREATE TABLE "AuthorityIssuer" ("issuerId" TEXT NOT NULL PRIMARY KEY, "authorityId" TEXT NOT NULL)`);
+    await client.$disconnect();
+    client = undefined;
+
+    let migrationRan = false;
+    const result = await provisionProductionDatabase(
+      { DATABASE_URL: databaseUrl },
+      async () => {
+        migrationRan = true;
+        return true;
+      },
+    );
+    assert.deepEqual(result, { ok: false, errorCode: "MIGRATION_FAILED" });
+    assert.equal(migrationRan, false);
+  } finally {
+    await client?.$disconnect();
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
+test("gated trust cutover migration is not run by normal API provisioning", async () => {
+  const migrationsDir = resolve(projectRoot, "prisma/migrations");
+  const cutoverDir = resolve(projectRoot, "prisma/cutover/migrations");
+  const appMigrations = await readdir(migrationsDir);
+  const cutoverMigrations = await readdir(cutoverDir);
+
+  assert.equal(appMigrations.includes("20260912160000_split_protected_trust_database"), false);
+  assert.equal(appMigrations.includes("20260909120000_trust_persistence_foundation"), false);
+  assert.ok(cutoverMigrations.includes("20260912160000_split_protected_trust_database"));
+  assert.ok(cutoverMigrations.includes("20260909120000_trust_persistence_foundation"));
 });
 
 async function sqliteTableNames(prisma: PrismaClient): Promise<string[]> {

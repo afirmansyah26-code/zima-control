@@ -37,21 +37,25 @@ export async function runWorkerProcess(
     const intervalMs = config.observationIntervalMs ?? DEFAULT_OBSERVATION_INTERVAL_MS;
     const loop = startWorkerLoop(runtime, intervalMs, writeSafeLog);
 
-    const shutdown = async () => {
-      try {
-        await loop.stop();
-      } catch {
-        writeSafeLog({
-          level: "error",
-          event: "worker_shutdown_failed",
-          errorCode: "SHUTDOWN_FAILURE",
-        });
-        process.exitCode = 1;
-      }
-    };
+    await new Promise<void>((resolve) => {
+      const shutdown = async () => {
+        try {
+          await loop.stop();
+        } catch {
+          writeSafeLog({
+            level: "error",
+            event: "worker_shutdown_failed",
+            errorCode: "SHUTDOWN_FAILURE",
+          });
+          process.exitCode = 1;
+        } finally {
+          resolve();
+        }
+      };
 
-    process.once("SIGINT", () => { void shutdown(); });
-    process.once("SIGTERM", () => { void shutdown(); });
+      process.once("SIGINT", () => { void shutdown(); });
+      process.once("SIGTERM", () => { void shutdown(); });
+    });
 
     return true;
   } catch (error) {

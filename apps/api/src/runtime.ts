@@ -133,8 +133,9 @@ export function readApiRuntimeConfig(environment: EnvironmentSource): ApiRuntime
   if (secureCookieSetting !== undefined && secureCookieSetting !== "true" && secureCookieSetting !== "false") {
     throw new ApiRuntimeConfigError("INVALID_AUTH_COOKIE_SETTING");
   }
-  const authCookieSecure = production
-    || secureCookieSetting === "true";
+  const authCookieSecure = secureCookieSetting !== undefined
+    ? secureCookieSetting === "true"
+    : production;
   const proxySetting = environment.TRUST_FORWARDED_PROTO?.trim().toLowerCase();
   if (proxySetting !== undefined && proxySetting !== "true" && proxySetting !== "false") {
     throw new ApiRuntimeConfigError("INVALID_PROXY_SETTING");

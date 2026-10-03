@@ -39,14 +39,7 @@ RUN npm run build --workspace=@zima-control-center/application-registry-contract
     && npm run build --workspace=@zima-control-center/core \
     && npm run build --workspace=@zima-control-center/api
 
-# Preserve prisma CLI and schema engine for deterministic runtime migrations
-RUN mkdir -p /tmp/prisma-cli \
-    && cp -R node_modules/prisma /tmp/prisma-cli/ \
-    && cp -R node_modules/@prisma /tmp/prisma-cli/ \
-    && npm prune --omit=dev --omit=optional \
-    && cp -R /tmp/prisma-cli/prisma node_modules/ \
-    && cp -R /tmp/prisma-cli/@prisma/* node_modules/@prisma/ \
-    && rm -rf /tmp/prisma-cli
+RUN npm prune --omit=dev --omit=optional
 
 FROM node:22-alpine AS runtime
 ENV NODE_ENV=production

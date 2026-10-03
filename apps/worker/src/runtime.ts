@@ -281,9 +281,6 @@ export function startWorkerLoop(
         timer = setTimeout(() => {
           void executeCycle();
         }, intervalMs);
-        if (typeof timer.unref === "function") {
-          timer.unref();
-        }
       }
     }
   };

@@ -43,7 +43,7 @@ test("concurrent source mutation is rejected by the quiescence lock", async () =
 
 test("cleanup migration gates current source and encloses late checks in one transaction", async () => {
   const sql = await readFile(resolve(root,
-    "prisma/migrations/20260912160000_split_protected_trust_database/migration.sql"), "utf8");
+    "prisma/cutover/migrations/20260912160000_split_protected_trust_database/migration.sql"), "utf8");
   const begin = sql.indexOf("BEGIN IMMEDIATE;");
   const firstDrop = sql.indexOf('DROP TABLE "AuthorityTrustAuditEvent"');
   const lateCheck = sql.lastIndexOf("pragma_foreign_key_check");
