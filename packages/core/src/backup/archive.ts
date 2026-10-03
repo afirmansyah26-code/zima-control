@@ -4,6 +4,7 @@
  * Implements deterministic creation and verification of .tar.zst archives.
  * Supports both high-performance system zstd binary (isolated execution)
  * and in-process WebAssembly Zstandard fallback (zero-dependency portability).
+ * Supports multi-source entries (database dumps + persistent files) into unified archives.
  *
  * Reference: docs/ZCC-BACKUP-FOUNDATION-TECHNICAL-CONTRACT.md (Section 3, 6, 8)
  */
@@ -12,6 +13,8 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { open, stat, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import * as tar from "tar";
 import { init, compress, decompress } from "@bokuweb/zstd-wasm";
@@ -48,9 +51,18 @@ export function findSystemZstdExecutable(): string | null {
   return null;
 }
 
+export interface ArchiveFileEntry {
+  readonly diskPath: string;
+  readonly archiveRelativePath: string;
+  readonly sizeBytes?: bigint;
+  readonly mode?: number;
+  readonly mtime?: Date;
+}
+
 export interface CreateTarZstdOptions {
-  readonly sourceRoot: string;
-  readonly fileRelativePaths: readonly string[];
+  readonly sourceRoot?: string;
+  readonly fileRelativePaths?: readonly string[];
+  readonly entries?: readonly ArchiveFileEntry[];
   readonly targetBundlePath: string;
   readonly compressionLevel?: number;
 }
@@ -62,15 +74,71 @@ export interface CreateTarZstdResult {
 }
 
 /**
- * Creates a tar.zst bundle from a list of relative paths within sourceRoot.
- * Streaming pipeline: tar Pack -> zstd compression -> target file + SHA-256 calculation.
+ * Converts options into an array of unified ArchiveFileEntry objects.
+ */
+function resolveArchiveEntries(options: CreateTarZstdOptions): ArchiveFileEntry[] {
+  if (options.entries && options.entries.length > 0) {
+    return [...options.entries];
+  }
+
+  if (options.sourceRoot && options.fileRelativePaths) {
+    return options.fileRelativePaths.map((relPath) => ({
+      diskPath: join(options.sourceRoot!, relPath),
+      archiveRelativePath: relPath,
+    }));
+  }
+
+  throw new Error("Cannot create archive: no files or entries provided");
+}
+
+/**
+ * Creates a stream of POSIX tar blocks for the specified archive entries.
+ */
+function createTarStreamFromEntries(entries: readonly ArchiveFileEntry[]): Readable {
+  return Readable.from(async function* () {
+    for (const entry of entries) {
+      const fileStat = await stat(entry.diskPath);
+      const size = entry.sizeBytes !== undefined ? Number(entry.sizeBytes) : fileStat.size;
+      const header = new tar.Header({
+        path: entry.archiveRelativePath.replace(/\\/g, "/"),
+        size,
+        mode: entry.mode ?? fileStat.mode,
+        mtime: entry.mtime ?? fileStat.mtime,
+        type: "File",
+      });
+      header.encode();
+      if (!header.block) {
+        throw new Error(`Failed to encode tar header for ${entry.archiveRelativePath}`);
+      }
+      yield header.block;
+
+      const rs = createReadStream(entry.diskPath);
+      for await (const chunk of rs) {
+        yield Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      }
+
+      const remainder = size % 512;
+      if (remainder > 0) {
+        yield Buffer.alloc(512 - remainder);
+      }
+    }
+
+    // Two 512-byte zero blocks indicating EOF in POSIX tar
+    yield Buffer.alloc(1024);
+  }());
+}
+
+/**
+ * Creates a tar.zst bundle from entries or a list of relative paths.
+ * Streaming pipeline: tar Stream -> zstd compression -> target file + SHA-256 calculation.
  */
 export async function createTarZstdBundle(
   options: CreateTarZstdOptions,
 ): Promise<CreateTarZstdResult> {
-  const { sourceRoot, fileRelativePaths, targetBundlePath, compressionLevel = 3 } = options;
+  const { targetBundlePath, compressionLevel = 3 } = options;
+  const entries = resolveArchiveEntries(options);
 
-  if (fileRelativePaths.length === 0) {
+  if (entries.length === 0) {
     throw new Error("Cannot create empty archive: no files provided");
   }
 
@@ -80,8 +148,7 @@ export async function createTarZstdBundle(
   if (systemZstd) {
     return createBundleWithSystemZstd(
       systemZstd,
-      sourceRoot,
-      fileRelativePaths,
+      entries,
       targetBundlePath,
       compressionLevel,
     );
@@ -89,8 +156,7 @@ export async function createTarZstdBundle(
 
   // Otherwise, use the portable in-process WebAssembly Zstandard engine
   return createBundleWithWasmZstd(
-    sourceRoot,
-    fileRelativePaths,
+    entries,
     targetBundlePath,
     compressionLevel,
   );
@@ -100,23 +166,14 @@ export async function createTarZstdBundle(
  * In-process WebAssembly implementation (portable, zero system dependencies).
  */
 async function createBundleWithWasmZstd(
-  sourceRoot: string,
-  fileRelativePaths: readonly string[],
+  entries: readonly ArchiveFileEntry[],
   targetBundlePath: string,
   compressionLevel: number,
 ): Promise<CreateTarZstdResult> {
   await ensureZstdWasmInitialized();
 
-  // 1. Pack files into tar buffer/stream
-  const tarStream = tar.create(
-    {
-      cwd: sourceRoot,
-      portable: true,
-      noMtime: false,
-    },
-    fileRelativePaths as string[],
-  );
-
+  // 1. Pack entries into tar buffer
+  const tarStream = createTarStreamFromEntries(entries);
   const tarChunks: Buffer[] = [];
   let uncompressedBytes = 0n;
 
@@ -153,19 +210,11 @@ async function createBundleWithWasmZstd(
  */
 async function createBundleWithSystemZstd(
   zstdBinary: string,
-  sourceRoot: string,
-  fileRelativePaths: readonly string[],
+  entries: readonly ArchiveFileEntry[],
   targetBundlePath: string,
   compressionLevel: number,
 ): Promise<CreateTarZstdResult> {
-  const tarStream = tar.create(
-    {
-      cwd: sourceRoot,
-      portable: true,
-      noMtime: false,
-    },
-    fileRelativePaths as string[],
-  );
+  const tarStream = createTarStreamFromEntries(entries);
 
   const levelArg = `-${Math.max(1, Math.min(19, compressionLevel))}`;
   const zstdProcess = spawn(zstdBinary, [levelArg, "-c", "-q"], {

@@ -46,7 +46,7 @@ FROM node:22-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 
-RUN apk add --no-cache zstd && mkdir -p /data /run/zcc && chown -R node:node /data /run/zcc
+RUN apk add --no-cache zstd mariadb-client && mkdir -p /data /run/zcc && chown -R node:node /data /run/zcc
 
 COPY --from=build --chown=node:node /workspace/node_modules ./node_modules
 COPY --from=build --chown=node:node /workspace/package.json ./package.json
