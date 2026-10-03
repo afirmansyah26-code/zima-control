@@ -62,6 +62,7 @@ services:
     volumes:
       - registry-data:/data
       - ${RUNTIME_SOCKET_PATH:-/run/zcc/application-runtime.sock}:/run/zcc/application-runtime.sock
+      - ${DATA_APPDATA_PATH:-/DATA/AppData}:/DATA/AppData
     depends_on:
       api:
         condition: service_healthy

@@ -21,10 +21,13 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "tsx --test src/runtime/runtime-state.test.ts src/registry-runtime.test.ts src/runtime-observation-contract.test.ts src/application-registry-service.test.ts src/prisma-registry.integration.test.ts src/auth-policy.test.ts src/mutation-safety.test.ts src/durable-mutation.test.ts src/parent-child-mutation.test.ts src/prisma-durable-mutation.integration.test.ts src/production-sqlite-policy.test.ts src/authority/authority.test.ts src/authority/trust-domain.test.ts src/authority/prisma-authority.integration.test.ts",
-    "test:backup": "tsx --test src/backup/backup-domain.test.ts src/backup/prisma-backup.integration.test.ts"
+    "test:backup": "tsx --test src/backup/backup-domain.test.ts src/backup/prisma-backup.integration.test.ts src/backup/backup-engine.test.ts"
   },
   "dependencies": {
+    "@bokuweb/zstd-wasm": "^0.0.27",
     "@prisma/client": "^6.19.0",
+    "fzstd": "^0.1.1",
+    "tar": "^7.5.22",
     "yaml": "^2.8.2"
   }
 }

@@ -88,7 +88,7 @@ test("trust persistence remains absent from API, web, worker, Compose, and Docke
 
 test("migration declares trust checks, active-key uniqueness, backfill, and immutable history", async () => {
   const root = resolve(import.meta.dirname, "../../../..");
-  const migration = await readFile(resolve(root, "prisma/migrations/20260909120000_trust_persistence_foundation/migration.sql"), "utf8");
+  const migration = await readFile(resolve(root, "prisma/cutover/migrations/20260909120000_trust_persistence_foundation/migration.sql"), "utf8");
   assert.match(migration, /'UNINITIALIZED', 0, 0/);
   assert.match(migration, /WHERE "status" = 'ACTIVE'/);
   assert.match(migration, /CHECK \("keyVersion" > 0\)/);

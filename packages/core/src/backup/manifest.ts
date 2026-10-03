@@ -111,11 +111,11 @@ export function parseBackupManifestJson(jsonString: string): BackupManifestV1 {
 /**
  * Redacts potential secrets, passwords, or tokens from any log or metadata object.
  */
-export function sanitizeBackupMetadata<T extends Record<string, unknown>>(data: T): T {
+export function sanitizeBackupMetadata<T extends object>(data: T): T {
   const SENSITIVE_KEYS = /password|secret|token|credential|key|auth/i;
   const sanitized: Record<string, unknown> = {};
 
-  for (const [key, value] of Object.entries(data)) {
+  for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
     if (SENSITIVE_KEYS.test(key)) {
       sanitized[key] = "***REDACTED***";
     } else if (value && typeof value === "object" && !Array.isArray(value)) {

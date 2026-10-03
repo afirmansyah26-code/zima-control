@@ -78,7 +78,7 @@ export function validatePersistentFilesHostPath(rawPath: string): string {
   }
 
   // Prevent directory traversal tokens before normalization
-  if (trimmed.includes("..") || trimmed.includes("~")) {
+  if (trimmed.includes("..") || /(?:^|[/\\])~/.test(trimmed)) {
     throw new InvalidBackupSourcePathError(rawPath, "Path traversal ('..' or '~') is strictly prohibited");
   }
 
