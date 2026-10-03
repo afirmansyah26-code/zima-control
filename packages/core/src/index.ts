@@ -198,3 +198,4 @@ export type {
 } from "./registry-types.js";
 export * from "./authority/index.js";
 export * from "./runtime/index.js";
+export * from "./backup/index.js";

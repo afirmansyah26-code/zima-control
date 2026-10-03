@@ -24,6 +24,7 @@ model Application {
 
   deployment            ApplicationDeployment?
   authorityAssociations AuthorityApplication[]
+  backupConfig          BackupConfig?
 
   @@index([status])
 }
@@ -403,4 +404,194 @@ model AuthorityAuditEvent {
   @@index([deploymentId])
   @@index([serviceIdentity])
   @@index([timestamp])
+}
+
+// ==============================================================================
+// 1. BACKUP CONFIGURATION (DESIRED STATE)
+// ==============================================================================
+
+enum BackupEnabledStatus {
+  ENABLED
+  DISABLED
+}
+
+enum BackupSourceType {
+  DATABASE
+  PERSISTENT_FILES
+}
+
+enum DatabaseEngineType {
+  MARIADB
+  MYSQL
+  POSTGRESQL
+  SQLITE
+}
+
+enum DestinationType {
+  LOCAL_FILESYSTEM
+  SYNOLOGY_NAS
+  SMB_SHARE
+  S3_COMPATIBLE
+}
+
+model BackupConfig {
+  id                String              @id @default(uuid())
+  applicationId     String              @unique
+  status            BackupEnabledStatus @default(ENABLED)
+  retentionVersions Int                 @default(3)
+  scheduleCron      String?
+  destinationId     String
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  application Application          @relation(fields: [applicationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  destination BackupDestination    @relation(fields: [destinationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sources     BackupSourceConfig[]
+  jobs        BackupJob[]
+
+  @@index([status])
+}
+
+model BackupSourceConfig {
+  id                 String              @id @default(uuid())
+  backupConfigId     String
+  sourceType         BackupSourceType
+  name               String
+  dbEngine           DatabaseEngineType?
+  dbTarget           String?
+  dbHost             String?
+  dbPort             Int?
+  dbUser             String?
+  dbSecretRef        String?
+  fileHostPath       String?
+  fileExclusions     String?
+  fileFollowSymlinks Boolean             @default(false)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  backupConfig BackupConfig @relation(fields: [backupConfigId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([backupConfigId, name])
+  @@index([backupConfigId, sourceType])
+}
+
+model BackupDestination {
+  id                 String          @id @default(uuid())
+  name               String          @unique
+  type               DestinationType @default(LOCAL_FILESYSTEM)
+  basePath           String
+  isActive           Boolean         @default(true)
+  configJsonRedacted String?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  backupConfigs BackupConfig[]
+  artifacts     BackupArtifact[]
+}
+
+// ==============================================================================
+// 2. BACKUP JOB & EXECUTION (TRANSIENT / RUNTIME STATE)
+// ==============================================================================
+
+enum BackupJobStatus {
+  QUEUED
+  INITIALIZING
+  CAPTURING
+  VERIFYING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum BackupTriggerType {
+  MANUAL
+  SCHEDULED
+}
+
+model BackupJob {
+  id                String            @id @default(uuid())
+  applicationId     String
+  backupConfigId    String
+  triggerType       BackupTriggerType @default(MANUAL)
+  actorId           String?
+  status            BackupJobStatus   @default(QUEUED)
+  failureReasonCode String?
+  failureDetail     String?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  backupConfig BackupConfig          @relation(fields: [backupConfigId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  sourceTasks  BackupJobSourceTask[]
+  artifact     BackupArtifact?
+
+  @@index([applicationId, createdAt])
+  @@index([status, startedAt])
+}
+
+model BackupJobSourceTask {
+  id                String           @id @default(uuid())
+  jobId             String
+  sourceName        String
+  sourceType        BackupSourceType
+  status            BackupJobStatus  @default(QUEUED)
+  bytesCaptured     BigInt           @default(0)
+  sha256Digest      String?
+  failureReasonCode String?
+  startedAt         DateTime?
+  completedAt       DateTime?
+
+  job BackupJob @relation(fields: [jobId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@unique([jobId, sourceName])
+  @@index([jobId, status])
+}
+
+// ==============================================================================
+// 3. IMMUTABLE HISTORICAL RECORDS & ARTIFACTS
+// ==============================================================================
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  VERIFICATION_FAILED
+}
+
+model BackupArtifact {
+  id                 String             @id @default(uuid())
+  jobId              String             @unique
+  applicationId      String
+  destinationId      String
+  bundleFileName     String
+  bundleSizeBytes    BigInt
+  uncompressedBytes  BigInt
+  sha256Digest       String
+  manifestJson       String
+  formatVersion      Int                @default(1)
+  verificationStatus VerificationStatus @default(PENDING)
+  verifiedAt         DateTime?
+  isRetained         Boolean            @default(true)
+  prunedAt           DateTime?
+  createdAt          DateTime           @default(now())
+
+  job           BackupJob                  @relation(fields: [jobId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  destination   BackupDestination          @relation(fields: [destinationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  verifications BackupVerificationRecord[]
+
+  @@index([applicationId, isRetained, createdAt])
+  @@index([verificationStatus])
+}
+
+model BackupVerificationRecord {
+  id                String             @id @default(uuid())
+  artifactId        String
+  status            VerificationStatus
+  checksRunJson     String
+  failureReasonCode String?
+  performedAt       DateTime           @default(now())
+
+  artifact BackupArtifact @relation(fields: [artifactId], references: [id], onDelete: Cascade, onUpdate: Restrict)
+
+  @@index([artifactId, performedAt])
 }

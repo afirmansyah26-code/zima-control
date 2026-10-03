@@ -46,6 +46,13 @@ test("Prisma provisioning creates the frozen schema and reruns as a no-op", asyn
       "AuthorityDeployment",
       "AuthorityIntent",
       "AuthorityService",
+      "BackupArtifact",
+      "BackupConfig",
+      "BackupDestination",
+      "BackupJob",
+      "BackupJobSourceTask",
+      "BackupSourceConfig",
+      "BackupVerificationRecord",
       "DeploymentNetwork",
       "DeploymentPort",
       "DeploymentVolume",
@@ -63,7 +70,7 @@ test("Prisma provisioning creates the frozen schema and reruns as a no-op", asyn
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('AuthorityIssuer','AuthoritySigningKey','AuthorityTrustOperation','AuthorityTrustAuditEvent')`,
     );
     assert.equal(trustTables.length, 0);
-    assert.equal(await migrationCount(prisma), 3);
+    assert.equal(await migrationCount(prisma), 4);
 
     await prisma.$disconnect();
     prisma = undefined;
@@ -77,7 +84,7 @@ test("Prisma provisioning creates the frozen schema and reruns as a no-op", asyn
 
     prisma = new PrismaClient({ datasources: { db: { url: databaseUrl } } });
     assert.deepEqual(await sqliteTableNames(prisma), firstTables);
-    assert.equal(await migrationCount(prisma), 3);
+    assert.equal(await migrationCount(prisma), 4);
   } finally {
     await prisma?.$disconnect();
     assert.equal(dirname(databasePath), migrationsRoot);
