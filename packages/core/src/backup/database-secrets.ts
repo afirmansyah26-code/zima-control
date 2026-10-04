@@ -20,8 +20,11 @@ export class EnvironmentDatabaseSecretResolver implements DatabaseSecretResolver
     if (!secretRef || typeof secretRef !== "string") {
       return null;
     }
+    if (secretRef.startsWith("RAW:") || secretRef.startsWith("PLAIN:")) {
+      return secretRef.slice(secretRef.indexOf(":") + 1);
+    }
     const envKey = secretRef.startsWith("ENV:") ? secretRef.slice(4) : secretRef;
-    const value = process.env[envKey];
+    const value = process.env[envKey] ?? process.env[secretRef];
     return value ?? null;
   }
 }
@@ -48,6 +51,9 @@ export class InMemoryDatabaseSecretResolver implements DatabaseSecretResolver {
 
   public async resolveSecret(secretRef: string): Promise<string | null> {
     if (!secretRef) return null;
-    return this.secrets.get(secretRef) ?? null;
+    if (secretRef.startsWith("RAW:") || secretRef.startsWith("PLAIN:")) {
+      return secretRef.slice(secretRef.indexOf(":") + 1);
+    }
+    return this.secrets.get(secretRef) ?? this.secrets.get(secretRef.startsWith("ENV:") ? secretRef.slice(4) : secretRef) ?? null;
   }
 }

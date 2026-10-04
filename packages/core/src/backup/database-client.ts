@@ -301,3 +301,65 @@ export class NativeDatabaseClientAdapter implements DatabaseClientAdapter {
     }
   }
 }
+
+/**
+ * Mock DatabaseClientAdapter simulating native client execution deterministically in tests.
+ */
+export class MockDatabaseClientAdapter implements DatabaseClientAdapter {
+  public findExecutableResult: string | null = "/usr/bin/mariadb-dump";
+  public queryResultStdout = "";
+  public queryErrorToThrow: Error | null = null;
+  public dumpErrorToThrow: Error | null = null;
+  public dumpSqlContent: string =
+    "-- MariaDB dump 10.19\n" +
+    "/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;\n" +
+    "CREATE TABLE `users` (`id` int(11) NOT NULL, `name` varchar(255) DEFAULT NULL);\n" +
+    "INSERT INTO `users` VALUES (1,'alice'),(2,'bob');\n" +
+    "-- Dump completed on 2026-10-03 12:00:00\n";
+
+  constructor(options?: {
+    installed?: boolean;
+    queryStdout?: string;
+    expectedDumpContent?: string;
+  }) {
+    if (options?.installed === false) {
+      this.findExecutableResult = null;
+    }
+    if (options?.queryStdout !== undefined) {
+      this.queryResultStdout = options.queryStdout;
+    }
+    if (options?.expectedDumpContent !== undefined) {
+      this.dumpSqlContent = options.expectedDumpContent;
+    }
+  }
+
+  public findExecutable(candidates: readonly string[]): string | null {
+    if (this.findExecutableResult) {
+      return candidates[0] ?? this.findExecutableResult;
+    }
+    return null;
+  }
+
+  public async executeQuery(options: ExecuteQueryOptions): Promise<ExecuteQueryResult> {
+    if (this.queryErrorToThrow) {
+      throw this.queryErrorToThrow;
+    }
+    return { stdout: this.queryResultStdout || options.connection.targetDatabase || "ok" };
+  }
+
+  public async executeDump(options: ExecuteDumpOptions): Promise<ExecuteDumpResult> {
+    if (this.dumpErrorToThrow) {
+      throw this.dumpErrorToThrow;
+    }
+
+    await writeFile(options.stagingFilePath, this.dumpSqlContent, "utf8");
+
+    const contentBuffer = Buffer.from(this.dumpSqlContent, "utf8");
+    const digest = createHash("sha256").update(contentBuffer).digest("hex");
+
+    return {
+      bytesCaptured: BigInt(contentBuffer.length),
+      sha256Digest: digest,
+    };
+  }
+}

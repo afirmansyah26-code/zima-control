@@ -45,6 +45,8 @@ import {
   ApplicationRuntimeClientError,
   type ApplicationRuntimeGateway,
 } from "@zima-control-center/application-runtime-client";
+import { type BackupOrchestratorService } from "@zima-control-center/core";
+import { installBackupRoutes } from "./backup-http.js";
 
 export type ApplicationRegistryReadService = Pick<
   ApplicationRegistryService,
@@ -63,6 +65,7 @@ export interface ApplicationRegistryApiOptions {
   mutation?: ApplicationMutationService;
   mutationStatus?: ApplicationMutationStatusReadService;
   runtimeGateway?: ApplicationRuntimeGateway;
+  backupOrchestrator?: BackupOrchestratorService;
 }
 
 /**
@@ -113,6 +116,12 @@ export function createApplicationRegistryApi(
 
   if (options.auth && options.mutationStatus) {
     installApplicationMutationStatusRoute(app, options.auth, options.mutationStatus);
+  }
+
+  if (options.auth && options.backupOrchestrator) {
+    installBackupRoutes(app, options.backupOrchestrator, options.auth, {
+      trustForwardedProto: options.trustForwardedProto,
+    });
   }
 
   const requireReadPermission = async (context: Context, next: () => Promise<void>) => {

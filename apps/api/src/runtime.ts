@@ -4,6 +4,7 @@ import {
   PrismaDurableMutationRepository,
   PrismaRegistryRepository,
   validateProductionSqliteDatabaseUrl,
+  BackupOrchestratorService,
   type RegistryReadRepository,
 } from "@zima-control-center/core";
 import { ApplicationRuntimeGateway } from "@zima-control-center/application-runtime-client";
@@ -231,10 +232,11 @@ export function composeApplicationRegistryApi(
   mutationStatus?: ApplicationMutationStatusReadService,
   mutation?: ApplicationMutationService,
   runtimeGateway?: ApplicationRuntimeGateway,
+  backupOrchestrator?: BackupOrchestratorService,
 ): Hono {
   return createApplicationRegistryApi(
     new ApplicationRegistryService(repository),
-    { readiness, auth, trustForwardedProto, mutationStatus, mutation, runtimeGateway },
+    { readiness, auth, trustForwardedProto, mutationStatus, mutation, runtimeGateway, backupOrchestrator },
   );
 }
 
@@ -259,6 +261,7 @@ export function composeApiRuntimeWithPrisma(
     new PrismaAuthRepository(prisma),
     { secureCookies: config.authCookieSecure },
   );
+  const backupOrchestrator = new BackupOrchestratorService(prisma);
 
   const isRuntimeAdapter = config.mutationCapabilityMode === "RUNTIME_ADAPTER";
   const runtimeGateway = isRuntimeAdapter
@@ -315,7 +318,7 @@ export function composeApiRuntimeWithPrisma(
     } catch {
       return false;
     }
-  }, authentication, config.trustForwardedProto, mutationStatus, mutation, runtimeGateway);
+  }, authentication, config.trustForwardedProto, mutationStatus, mutation, runtimeGateway, backupOrchestrator);
 
   return {
     app,

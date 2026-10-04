@@ -21,6 +21,7 @@ import {
   type DatabaseSecretResolver,
   EnvironmentDatabaseSecretResolver,
 } from "./database-secrets.js";
+import { type DatabaseClientAdapter } from "./database-client.js";
 import {
   MariaDbBackupProvider,
   type DatabaseEngineBackupProvider,
@@ -34,14 +35,15 @@ export class DatabaseSourceProvider implements BackupSourceProvider {
 
   constructor(options?: {
     secretResolver?: DatabaseSecretResolver;
+    clientAdapter?: DatabaseClientAdapter;
     providers?: DatabaseEngineBackupProvider[];
   }) {
     this.secretResolver = options?.secretResolver ?? new EnvironmentDatabaseSecretResolver();
     this.engineProviders = new Map();
 
     const initialProviders = options?.providers ?? [
-      new MariaDbBackupProvider(),
-      new MySqlBackupProvider(),
+      new MariaDbBackupProvider(options?.clientAdapter),
+      new MySqlBackupProvider(options?.clientAdapter),
     ];
 
     for (const p of initialProviders) {

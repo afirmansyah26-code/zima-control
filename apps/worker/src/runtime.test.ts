@@ -376,3 +376,67 @@ test("startWorkerLoop runs initial cycle and stops cleanly on stop()", async () 
   assert.equal(disconnected, true);
   assert.ok(events.some((e) => e.event === "worker_stopped"));
 });
+
+test("runWorkerCycle processes queued backup job when backupOrchestrator is present", async () => {
+  let backupJobProcessed = false;
+  const events: WorkerLogEvent[] = [];
+
+  const runtime: WorkerRuntime = {
+    discovery: {
+      discover: async () => ({ discovered: [], failures: [] }),
+    },
+    gateway: {} as any,
+    getActiveDeployments: async () => [],
+    observeApplicationStatus: async () => ({} as any),
+    observeApplicationInspection: async () => ({} as any),
+    backupOrchestrator: {
+      processNextQueuedJob: async () => {
+        backupJobProcessed = true;
+        return {
+          jobId: "job-test-1",
+          status: "COMPLETED",
+          failureReasonCode: null,
+          bundleFileName: "backup.tar.zst",
+          bundleSizeBytes: 1024n,
+          sha256Digest: "abcd",
+        };
+      },
+      recoverStaleBackupJobs: async () => 0,
+    } as any,
+    disconnect: async () => {},
+  };
+
+  await runWorkerOnce(runtime, (e) => events.push(e));
+
+  assert.equal(backupJobProcessed, true);
+  assert.ok(events.some((e) => e.event === "worker_backup_job_completed"));
+});
+
+test("startWorkerLoop recovers stale backup jobs on startup", async () => {
+  let recoveryRan = false;
+  const events: WorkerLogEvent[] = [];
+
+  const runtime: WorkerRuntime = {
+    discovery: {
+      discover: async () => ({ discovered: [], failures: [] }),
+    },
+    gateway: {} as any,
+    getActiveDeployments: async () => [],
+    observeApplicationStatus: async () => ({} as any),
+    observeApplicationInspection: async () => ({} as any),
+    backupOrchestrator: {
+      processNextQueuedJob: async () => null,
+      recoverStaleBackupJobs: async () => {
+        recoveryRan = true;
+        return 2;
+      },
+    } as any,
+    disconnect: async () => {},
+  };
+
+  const handle = startWorkerLoop(runtime, 50, (e) => events.push(e));
+  await new Promise((r) => setTimeout(r, 20));
+  await handle.stop();
+
+  assert.equal(recoveryRan, true);
+});

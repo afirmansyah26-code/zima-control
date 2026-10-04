@@ -1,6 +1,10 @@
 import { PrismaClient } from "@prisma/client";
 import {
   validateProductionSqliteDatabaseUrl,
+  BackupOrchestratorService,
+  LocalFilesystemDestinationProvider,
+  DatabaseSourceProvider,
+  EnvironmentDatabaseSecretResolver,
   type DiscoveryResult,
   type DiscoveryService,
 } from "@zima-control-center/core";
@@ -49,6 +53,7 @@ export interface WorkerRuntime {
   getCurrentDeployment?(applicationId: string): Promise<{ id: string } | null>;
   observeApplicationStatus(applicationId: string, deploymentId: string): Promise<ApplicationRuntimeResponse>;
   observeApplicationInspection(applicationId: string, deploymentId: string): Promise<ApplicationRuntimeResponse>;
+  backupOrchestrator?: BackupOrchestratorService;
   disconnect(): Promise<void>;
 }
 
@@ -129,9 +134,17 @@ export function createWorkerRuntime(config: WorkerRuntimeConfig): WorkerRuntime 
   const gateway = new ApplicationRuntimeGateway({
     socketPath: config.runtimeSocketPath,
   });
+  const backupOrchestrator = new BackupOrchestratorService(
+    prisma,
+    new LocalFilesystemDestinationProvider(),
+    new DatabaseSourceProvider({
+      secretResolver: new EnvironmentDatabaseSecretResolver(),
+    }),
+  );
   return {
     discovery: createWorkerDiscoveryService(prisma, config.zimaosBaseUrl),
     gateway,
+    backupOrchestrator,
     async getActiveDeployments(): Promise<ActiveDeploymentTarget[]> {
       const rows = await prisma.applicationDeployment.findMany({
         select: { id: true, applicationId: true },
@@ -233,6 +246,25 @@ export async function runWorkerCycle(
 
   await reconcileAuthoritativeRuntimeObservations(runtime, result, log);
 
+  if (runtime.backupOrchestrator) {
+    try {
+      const backupResult = await runtime.backupOrchestrator.processNextQueuedJob();
+      if (backupResult) {
+        log({
+          level: backupResult.status === "COMPLETED" ? "info" : "error",
+          event: "worker_backup_job_completed",
+          errorCode: backupResult.failureReasonCode ?? undefined,
+        });
+      }
+    } catch {
+      log({
+        level: "error",
+        event: "worker_backup_job_failed",
+        errorCode: "BACKUP_EXECUTION_FAILED",
+      });
+    }
+  }
+
   return result;
 }
 
@@ -257,6 +289,9 @@ export function startWorkerLoop(
   intervalMs: number = DEFAULT_OBSERVATION_INTERVAL_MS,
   log: (event: WorkerLogEvent) => void = () => undefined,
 ): WorkerLoopHandle {
+  if (runtime.backupOrchestrator) {
+    void runtime.backupOrchestrator.recoverStaleBackupJobs().catch(() => {});
+  }
   let running = true;
   let inProgress = false;
   let timer: NodeJS.Timeout | null = null;
