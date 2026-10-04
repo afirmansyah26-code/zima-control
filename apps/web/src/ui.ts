@@ -4,6 +4,7 @@ import type {
   ApplicationRuntimeContainerResponse,
   ApplicationServiceResponse,
   ApplicationSummaryResponse,
+  AuthRole,
 } from "@zima-control-center/application-registry-contracts";
 import type { Clock } from "./app.js";
 import {
@@ -12,11 +13,17 @@ import {
   type ApplicationStatusFilter,
   type RegistryApiClient,
 } from "./registry-api.js";
+import { renderBackupSection } from "./backup-ui.js";
+import type { BackupApiClient } from "./backup-api.js";
 
 const unavailable = "Not available";
 const timezone = "Asia/Jakarta";
 
-export function createDashboardShell(root: HTMLElement): HTMLElement {
+export function createDashboardShell(
+  root: HTMLElement,
+  currentPath: string = "/applications",
+  navigate?: (pathname: string) => void,
+): HTMLElement {
   const document = root.ownerDocument;
   const skipLink = element(document, "a", "skip-link", "Skip to content");
   skipLink.href = "#main-content";
@@ -32,20 +39,55 @@ export function createDashboardShell(root: HTMLElement): HTMLElement {
   brand.href = "/applications";
   brand.setAttribute("aria-label", "Zima Control Center applications");
   brand.append(brandMark, brandCopy);
+  if (navigate) {
+    brand.addEventListener("click", (e) => {
+      e.preventDefault();
+      navigate("/applications");
+    });
+  }
 
-  const navLink = element(document, "a", "nav-link active");
-  navLink.href = "/applications";
-  navLink.setAttribute("aria-current", "page");
-  const navIcon = element(document, "span", "nav-icon", "▦");
-  navIcon.setAttribute("aria-hidden", "true");
-  navLink.append(
-    navIcon,
+  const isBackups = currentPath.startsWith("/backups");
+  const isApps = !isBackups;
+
+  const navLinkApps = element(document, "a", isApps ? "nav-link active" : "nav-link");
+  navLinkApps.href = "/applications";
+  if (isApps) {
+    navLinkApps.setAttribute("aria-current", "page");
+  }
+  const navIconApps = element(document, "span", "nav-icon", "▦");
+  navIconApps.setAttribute("aria-hidden", "true");
+  navLinkApps.append(
+    navIconApps,
     element(document, "span", undefined, "Applications"),
   );
+  if (navigate) {
+    navLinkApps.addEventListener("click", (e) => {
+      e.preventDefault();
+      navigate("/applications");
+    });
+  }
+
+  const navLinkBackups = element(document, "a", isBackups ? "nav-link active" : "nav-link");
+  navLinkBackups.href = "/backups";
+  if (isBackups) {
+    navLinkBackups.setAttribute("aria-current", "page");
+  }
+  const navIconBackups = element(document, "span", "nav-icon", "⛊");
+  navIconBackups.setAttribute("aria-hidden", "true");
+  navLinkBackups.append(
+    navIconBackups,
+    element(document, "span", undefined, "Backups"),
+  );
+  if (navigate) {
+    navLinkBackups.addEventListener("click", (e) => {
+      e.preventDefault();
+      navigate("/backups");
+    });
+  }
 
   const navigation = element(document, "nav", "primary-nav");
   navigation.setAttribute("aria-label", "Primary navigation");
-  navigation.append(navLink);
+  navigation.append(navLinkApps, navLinkBackups);
 
   const environment = element(document, "div", "environment-chip");
   const environmentDot = element(document, "span", "environment-dot");
@@ -73,6 +115,7 @@ export async function renderApplicationsPage(
   api: RegistryApiClient,
   clock: Clock,
   onUnauthorized?: () => void,
+  navigate?: (pathname: string) => void,
 ): Promise<void> {
   const document = content.ownerDocument;
   const heading = pageHeading(
@@ -102,7 +145,7 @@ export async function renderApplicationsPage(
       return application.name.toLocaleLowerCase().includes(query)
         || application.displayName?.toLocaleLowerCase().includes(query) === true;
     });
-    results.replaceChildren(createApplicationsTable(document, filtered, clock));
+    results.replaceChildren(createApplicationsTable(document, filtered, clock, navigate));
     results.setAttribute("aria-busy", "false");
   };
 
@@ -141,6 +184,9 @@ export async function renderApplicationDetailPage(
   applicationId: string,
   clock: Clock,
   onUnauthorized?: () => void,
+  userRole: AuthRole = "VIEWER",
+  backupApi?: BackupApiClient,
+  navigate?: (pathname: string) => void,
 ): Promise<void> {
   const document = content.ownerDocument;
   const loading = loadingState(document, "Loading application detail");
@@ -148,7 +194,7 @@ export async function renderApplicationDetailPage(
 
   try {
     const detail = await api.getApplicationDetail(applicationId);
-    content.replaceChildren(createApplicationDetail(document, detail, clock));
+    content.replaceChildren(createApplicationDetail(document, detail, clock, userRole, backupApi, navigate));
   } catch (error) {
     if (error instanceof RegistryApiError && error.code === "UNAUTHENTICATED" && onUnauthorized) {
       onUnauthorized();
@@ -162,7 +208,7 @@ export async function renderApplicationDetailPage(
       document,
       "Application detail could not be loaded",
       "The registry read API did not return a usable application snapshot.",
-      () => { void renderApplicationDetailPage(content, api, applicationId, clock); },
+      () => { void renderApplicationDetailPage(content, api, applicationId, clock, onUnauthorized, userRole, backupApi, navigate); },
     ));
   }
 }
@@ -240,6 +286,7 @@ function createApplicationsTable(
   document: Document,
   applications: ApplicationSummaryResponse[],
   clock: Clock,
+  navigate?: (pathname: string) => void,
 ): HTMLElement {
   if (applications.length === 0) {
     return emptyState(
@@ -272,6 +319,12 @@ function createApplicationsTable(
       application.displayName ?? application.name,
     );
     link.href = `/applications/${encodeURIComponent(application.id)}`;
+    if (navigate) {
+      link.addEventListener("click", (e) => {
+        e.preventDefault();
+        navigate(`/applications/${encodeURIComponent(application.id)}`);
+      });
+    }
     identityCell.append(link);
     if (application.displayName) {
       identityCell.append(element(document, "span", "cell-secondary", application.name));
@@ -301,11 +354,20 @@ function createApplicationDetail(
   document: Document,
   detail: ApplicationDetailResponse,
   clock: Clock,
+  userRole: AuthRole = "VIEWER",
+  backupApi?: BackupApiClient,
+  navigate?: (pathname: string) => void,
 ): HTMLElement {
   const application = detail.application;
   const wrapper = element(document, "div", "detail-page");
   const back = element(document, "a", "back-link", "← All applications");
   back.href = "/applications";
+  if (navigate) {
+    back.addEventListener("click", (e) => {
+      e.preventDefault();
+      navigate("/applications");
+    });
+  }
 
   const titleLine = element(document, "div", "detail-title-line");
   titleLine.append(
@@ -334,6 +396,11 @@ function createApplicationDetail(
     servicesSection(document, detail.services),
     runtimeSection(document, detail.runtimeContainers, clock),
   );
+
+  if (backupApi) {
+    renderBackupSection(wrapper, application.id, userRole, backupApi, clock, navigate ?? (() => {}));
+  }
+
   return wrapper;
 }
 

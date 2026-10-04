@@ -1,4 +1,7 @@
+import type { AuthRole } from "@zima-control-center/application-registry-contracts";
 import { AuthApiError, type AuthApiClient } from "./auth-api.js";
+import { createBackupApiClient, type BackupApiClient } from "./backup-api.js";
+import { renderBackupDetailPage, renderBackupHistoryPage } from "./backup-ui.js";
 import type { RegistryApiClient } from "./registry-api.js";
 import {
   createDashboardShell,
@@ -21,13 +24,29 @@ export async function renderDashboard(
   pathname: string,
   clock: Clock = () => new Date(),
   auth?: AuthApiClient,
+  backupApi?: BackupApiClient,
 ): Promise<void> {
+  const effectiveBackupApi = backupApi ?? createBackupApiClient();
+
   if (auth) {
-    await renderAuthenticatedDashboard(root, api, pathname, clock, auth);
+    await renderAuthenticatedDashboard(root, api, pathname, clock, auth, effectiveBackupApi);
     return;
   }
 
-  await renderRegistryRoute(root, api, pathname, clock);
+  const navigate = (nextPath: string) => {
+    navigateAndRender(root, api, nextPath, clock, auth, effectiveBackupApi);
+  };
+  await renderRegistryRoute(
+    root,
+    api,
+    pathname,
+    clock,
+    undefined,
+    undefined,
+    "VIEWER",
+    effectiveBackupApi,
+    navigate,
+  );
 }
 
 async function renderAuthenticatedDashboard(
@@ -36,6 +55,7 @@ async function renderAuthenticatedDashboard(
   pathname: string,
   clock: Clock,
   auth: AuthApiClient,
+  backupApi: BackupApiClient,
 ): Promise<void> {
   renderAuthenticationLoading(root);
   let user;
@@ -43,30 +63,44 @@ async function renderAuthenticatedDashboard(
     user = await auth.me();
   } catch (error) {
     if (error instanceof AuthApiError && error.code === "UNAUTHENTICATED") {
-      showLogin(root, api, clock, auth);
+      showLogin(root, api, clock, auth, backupApi);
       return;
     }
     renderAuthenticationUnavailable(root, () => {
-      void renderAuthenticatedDashboard(root, api, pathname, clock, auth);
+      void renderAuthenticatedDashboard(root, api, pathname, clock, auth, backupApi);
     });
     return;
   }
 
-  if (normalizePathname(pathname) === "/login") {
-    navigateAndRender(root, api, "/applications", clock, auth);
+  if (normalizePathname(pathname.split("?")[0] || "") === "/login") {
+    navigateAndRender(root, api, "/applications", clock, auth, backupApi);
     return;
   }
 
-  const content = createDashboardShell(root);
+  const navigate = (nextPath: string) => {
+    navigateAndRender(root, api, nextPath, clock, auth, backupApi);
+  };
+
+  const content = createDashboardShell(root, pathname, navigate);
   addAuthenticatedUserControls(root, user, async () => {
     await auth.logout();
     root.ownerDocument.defaultView?.history.pushState({}, "", "/login");
-    showLogin(root, api, clock, auth);
+    showLogin(root, api, clock, auth, backupApi);
   });
   const showUnauthenticated = (): void => {
-    showLogin(root, api, clock, auth);
+    showLogin(root, api, clock, auth, backupApi);
   };
-  await renderRegistryRoute(root, api, pathname, clock, content, showUnauthenticated);
+  await renderRegistryRoute(
+    root,
+    api,
+    pathname,
+    clock,
+    content,
+    showUnauthenticated,
+    user.role,
+    backupApi,
+    navigate,
+  );
 }
 
 function showLogin(
@@ -74,9 +108,10 @@ function showLogin(
   api: RegistryApiClient,
   clock: Clock,
   auth: AuthApiClient,
+  backupApi: BackupApiClient,
 ): void {
   renderLoginPage(root, auth, () => {
-    navigateAndRender(root, api, "/applications", clock, auth);
+    navigateAndRender(root, api, "/applications", clock, auth, backupApi);
   });
   if (root.ownerDocument.defaultView?.location.pathname !== "/login") {
     const view = root.ownerDocument.defaultView;
@@ -89,10 +124,11 @@ function navigateAndRender(
   api: RegistryApiClient,
   pathname: string,
   clock: Clock,
-  auth: AuthApiClient,
+  auth?: AuthApiClient,
+  backupApi?: BackupApiClient,
 ): void {
   root.ownerDocument.defaultView?.history.pushState({}, "", pathname);
-  void renderDashboard(root, api, pathname, clock, auth);
+  void renderDashboard(root, api, pathname, clock, auth, backupApi);
 }
 
 async function renderRegistryRoute(
@@ -102,17 +138,52 @@ async function renderRegistryRoute(
   clock: Clock,
   existingContent?: HTMLElement,
   onUnauthorized?: () => void,
+  userRole: AuthRole = "VIEWER",
+  backupApi: BackupApiClient = createBackupApiClient(),
+  navigate?: (nextPath: string) => void,
 ): Promise<void> {
-  const content = existingContent ?? createDashboardShell(root);
+  const content = existingContent ?? createDashboardShell(root, pathname, navigate);
   const route = parseRoute(pathname);
 
   if (route.kind === "applications") {
-    await renderApplicationsPage(content, api, clock, onUnauthorized);
+    await renderApplicationsPage(content, api, clock, onUnauthorized, navigate);
     return;
   }
 
   if (route.kind === "application-detail") {
-    await renderApplicationDetailPage(content, api, route.id, clock, onUnauthorized);
+    await renderApplicationDetailPage(
+      content,
+      api,
+      route.id,
+      clock,
+      onUnauthorized,
+      userRole,
+      backupApi,
+      navigate,
+    );
+    return;
+  }
+
+  if (route.kind === "backups") {
+    await renderBackupHistoryPage(
+      content,
+      backupApi,
+      clock,
+      navigate ?? (() => {}),
+      userRole,
+      route.applicationId,
+    );
+    return;
+  }
+
+  if (route.kind === "backup-detail") {
+    await renderBackupDetailPage(
+      content,
+      backupApi,
+      route.id,
+      clock,
+      navigate ?? (() => {}),
+    );
     return;
   }
 
@@ -122,29 +193,51 @@ async function renderRegistryRoute(
 type DashboardRoute =
   | { kind: "applications" }
   | { kind: "application-detail"; id: string }
+  | { kind: "backups"; applicationId?: string }
+  | { kind: "backup-detail"; id: string }
   | { kind: "not-found" };
 
-function parseRoute(pathname: string): DashboardRoute {
-  const normalized = normalizePathname(pathname);
+export function parseRoute(pathname: string): DashboardRoute {
+  const [rawPath, rawQuery] = pathname.split("?");
+  const normalized = normalizePathname(rawPath || "/");
 
   if (normalized === "/" || normalized === "/applications") {
     return { kind: "applications" };
   }
 
   const detailMatch = /^\/applications\/([^/]+)$/.exec(normalized);
-  if (!detailMatch?.[1]) {
-    return { kind: "not-found" };
-  }
-
-  try {
-    const id = decodeURIComponent(detailMatch[1]);
-    if (!id || id.length > 128 || /[\u0000-\u001f\u007f]/.test(id)) {
+  if (detailMatch?.[1]) {
+    try {
+      const id = decodeURIComponent(detailMatch[1]);
+      if (!id || id.length > 128 || /[\u0000-\u001f\u007f]/.test(id)) {
+        return { kind: "not-found" };
+      }
+      return { kind: "application-detail", id };
+    } catch {
       return { kind: "not-found" };
     }
-    return { kind: "application-detail", id };
-  } catch {
-    return { kind: "not-found" };
   }
+
+  if (normalized === "/backups") {
+    const params = new URLSearchParams(rawQuery || "");
+    const applicationId = params.get("applicationId") || undefined;
+    return { kind: "backups", applicationId };
+  }
+
+  const backupDetailMatch = /^\/backups\/([^/]+)$/.exec(normalized);
+  if (backupDetailMatch?.[1]) {
+    try {
+      const id = decodeURIComponent(backupDetailMatch[1]);
+      if (!id || id.length > 128 || /[\u0000-\u001f\u007f]/.test(id)) {
+        return { kind: "not-found" };
+      }
+      return { kind: "backup-detail", id };
+    } catch {
+      return { kind: "not-found" };
+    }
+  }
+
+  return { kind: "not-found" };
 }
 
 function normalizePathname(pathname: string): string {

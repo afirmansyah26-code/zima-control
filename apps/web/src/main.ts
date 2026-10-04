@@ -1,6 +1,7 @@
 import "./styles.css";
 import { renderDashboard } from "./app.js";
 import { createAuthApiClient } from "./auth-api.js";
+import { createBackupApiClient } from "./backup-api.js";
 import { createRegistryApiClient } from "./registry-api.js";
 import { createSafeConfigurationError, readWebRuntimeConfig } from "./runtime.js";
 
@@ -13,8 +14,9 @@ if (root) {
       baseUrl: apiBaseUrl,
     });
     const auth = createAuthApiClient({ baseUrl: apiBaseUrl });
+    const backupApi = createBackupApiClient({ baseUrl: apiBaseUrl });
     const render = (): void => {
-      void renderDashboard(root, api, window.location.pathname, undefined, auth);
+      void renderDashboard(root, api, window.location.pathname + window.location.search, undefined, auth, backupApi);
     };
     render();
     window.addEventListener("popstate", render);
