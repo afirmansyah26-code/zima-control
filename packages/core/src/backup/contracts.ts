@@ -190,3 +190,10 @@ export class BackupVerificationMismatchError extends BackupDomainError {
     this.name = "BackupVerificationMismatchError";
   }
 }
+
+export class BackupDestinationInvalidError extends BackupDomainError {
+  constructor(message: string) {
+    super(message, "BACKUP_DESTINATION_INVALID");
+    this.name = "BackupDestinationInvalidError";
+  }
+}

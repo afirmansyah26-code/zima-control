@@ -16,6 +16,7 @@ import {
   type DatabaseEngineType,
   type VerificationStatus,
   BackupDomainError,
+  BackupDestinationInvalidError,
 } from "./contracts.js";
 import { validatePersistentFilesHostPath } from "./source.js";
 import { validateCronExpression } from "./cron-validator.js";
@@ -25,7 +26,12 @@ import {
   type RetentionPruneResult,
   type ReconciliationResult,
 } from "./retention-service.js";
-import { LocalFilesystemDestinationProvider } from "./destination.js";
+import {
+  type BackupDestinationProvider,
+  type BackupDestinationProviderRegistry,
+  createDefaultDestinationProviderRegistry,
+  LocalFilesystemDestinationProvider,
+} from "./destination.js";
 import { DatabaseSourceProvider } from "./database-source.js";
 import { executeBackupJob, type BackupJobExecutionResult } from "./backup-service.js";
 
@@ -63,12 +69,7 @@ export class BackupSourceInvalidError extends BackupDomainError {
   }
 }
 
-export class BackupDestinationInvalidError extends BackupDomainError {
-  constructor(message: string) {
-    super(message, "BACKUP_DESTINATION_INVALID");
-    this.name = "BackupDestinationInvalidError";
-  }
-}
+export { BackupDestinationInvalidError };
 
 export class BackupConfigInvalidError extends BackupDomainError {
   constructor(message: string) {
@@ -288,15 +289,28 @@ export interface BackupHistoryDetailResult {
 
 export class BackupOrchestratorService {
   private readonly retentionService: BackupRetentionService;
+  private readonly destinationRegistry: BackupDestinationProviderRegistry;
 
   constructor(
     private readonly prisma: PrismaClient,
-    private readonly localDestinationProvider?: LocalFilesystemDestinationProvider,
+    destinationProviderOrRegistry?: BackupDestinationProvider | BackupDestinationProviderRegistry,
     private readonly databaseSourceProvider?: DatabaseSourceProvider,
   ) {
+    if (
+      destinationProviderOrRegistry &&
+      typeof (destinationProviderOrRegistry as BackupDestinationProviderRegistry).resolve === "function"
+    ) {
+      this.destinationRegistry = destinationProviderOrRegistry as BackupDestinationProviderRegistry;
+    } else if (destinationProviderOrRegistry) {
+      this.destinationRegistry = createDefaultDestinationProviderRegistry();
+      this.destinationRegistry.register(destinationProviderOrRegistry as BackupDestinationProvider);
+    } else {
+      this.destinationRegistry = createDefaultDestinationProviderRegistry();
+    }
+
     this.retentionService = new BackupRetentionService(
       this.prisma,
-      this.localDestinationProvider ?? new LocalFilesystemDestinationProvider(),
+      this.destinationRegistry,
     );
   }
 
@@ -426,32 +440,58 @@ export class BackupOrchestratorService {
       throw new BackupConfigInvalidError("Invalid scheduleCron syntax");
     }
 
-    // 3. Validate Destination
+    // 3. Validate Destination (H5)
     let destinationId = input.destinationId?.trim();
     if (destinationId) {
       const dest = await this.prisma.backupDestination.findUnique({
         where: { id: destinationId },
       });
-      if (!dest || !dest.isActive) {
+      if (!dest) {
         throw new BackupDestinationInvalidError(
-          `Backup destination '${destinationId}' does not exist or is inactive`,
+          `Backup destination '${destinationId}' does not exist`,
+        );
+      }
+      if (!dest.isActive) {
+        throw new BackupDestinationInvalidError(
+          `Backup destination '${destinationId}' is disabled or inactive`,
+        );
+      }
+      if (!this.destinationRegistry.has(dest.type)) {
+        throw new BackupDestinationInvalidError(
+          `Unsupported backup destination type: '${dest.type}'`,
         );
       }
     } else {
-      let defaultDest = await this.prisma.backupDestination.findFirst({
-        where: { isActive: true },
+      // Check if existing config already has a destinationId; preserve it if present (H5)
+      const existingConfig = await this.prisma.backupConfig.findUnique({
+        where: { applicationId: app.id },
       });
-      if (!defaultDest) {
-        defaultDest = await this.prisma.backupDestination.create({
-          data: {
-            name: "default-local-storage",
-            type: "LOCAL_FILESYSTEM",
-            basePath: "/DATA/AppData/zima-control-center/backups",
-            isActive: true,
-          },
+      if (existingConfig?.destinationId) {
+        destinationId = existingConfig.destinationId;
+        const dest = await this.prisma.backupDestination.findUnique({
+          where: { id: destinationId },
         });
+        if (!dest || !dest.isActive) {
+          throw new BackupDestinationInvalidError(
+            `Previously configured destination '${destinationId}' is inactive or no longer exists`,
+          );
+        }
+      } else {
+        let defaultDest = await this.prisma.backupDestination.findFirst({
+          where: { isActive: true, type: "LOCAL_FILESYSTEM" },
+        });
+        if (!defaultDest) {
+          defaultDest = await this.prisma.backupDestination.create({
+            data: {
+              name: "default-local-storage",
+              type: "LOCAL_FILESYSTEM",
+              basePath: "/DATA/AppData/zima-control-center/backups",
+              isActive: true,
+            },
+          });
+        }
+        destinationId = defaultDest.id;
       }
-      destinationId = defaultDest.id;
     }
 
     // 4. Validate Sources
@@ -996,7 +1036,7 @@ export class BackupOrchestratorService {
     const result = await executeBackupJob({
       jobId: queuedJob.id,
       prisma: this.prisma,
-      localDestinationProvider: this.localDestinationProvider,
+      destinationProviderRegistry: this.destinationRegistry,
       databaseSourceProvider: this.databaseSourceProvider,
     });
 
@@ -1148,9 +1188,12 @@ export class BackupOrchestratorService {
   /**
    * Reconciles application backup storage directory against database records.
    */
-  async reconcileApplicationStorage(applicationId: string): Promise<ReconciliationResult> {
+  async reconcileApplicationStorage(
+    applicationId: string,
+    targetDestinationId?: string,
+  ): Promise<ReconciliationResult> {
     const app = await this.resolveApp(applicationId);
-    return this.retentionService.reconcileStorage(app.id);
+    return this.retentionService.reconcileStorage(app.id, targetDestinationId);
   }
 
   /**

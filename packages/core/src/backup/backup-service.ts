@@ -18,7 +18,12 @@ import {
   BackupDomainError,
 } from "./contracts.js";
 import { transitionBackupJobStatus } from "./state-machine.js";
-import { LocalFilesystemDestinationProvider } from "./destination.js";
+import {
+  type BackupDestinationProviderRegistry,
+  type BackupDestinationProvider,
+  createDefaultDestinationProviderRegistry,
+  LocalFilesystemDestinationProvider,
+} from "./destination.js";
 import { scanPersistentFilesDirectory } from "./persistent-files-source.js";
 import { DatabaseSourceProvider } from "./database-source.js";
 import { createTarZstdBundle, type ArchiveFileEntry } from "./archive.js";
@@ -32,6 +37,7 @@ import {
 export interface ExecuteBackupJobOptions {
   readonly jobId: string;
   readonly prisma: PrismaClient;
+  readonly destinationProviderRegistry?: BackupDestinationProviderRegistry;
   readonly localDestinationProvider?: LocalFilesystemDestinationProvider;
   readonly databaseSourceProvider?: DatabaseSourceProvider;
 }
@@ -48,11 +54,21 @@ export interface BackupJobExecutionResult {
 /**
  * Safely moves a file from source to target, handling cross-device (EXDEV) boundary moves.
  */
-async function atomicMoveFile(sourcePath: string, targetPath: string): Promise<void> {
+async function atomicMoveFile(
+  sourcePath: string,
+  targetPath: string,
+  allowCrossDevice = true,
+): Promise<void> {
   try {
     await rename(sourcePath, targetPath);
   } catch (err: any) {
     if (err && err.code === "EXDEV") {
+      if (!allowCrossDevice) {
+        throw new BackupDomainError(
+          `Cross-device rename failed between '${sourcePath}' and '${targetPath}'. Staging and storage must share the same filesystem.`,
+          "DESTINATION_MISCONFIGURED",
+        );
+      }
       await copyFile(sourcePath, targetPath);
       await unlink(sourcePath);
     } else {
@@ -76,8 +92,6 @@ export async function executeBackupJob(
   options: ExecuteBackupJobOptions,
 ): Promise<BackupJobExecutionResult> {
   const { jobId, prisma } = options;
-  const destinationProvider =
-    options.localDestinationProvider ?? new LocalFilesystemDestinationProvider();
   const dbSourceProvider =
     options.databaseSourceProvider ?? new DatabaseSourceProvider();
 
@@ -102,6 +116,17 @@ export async function executeBackupJob(
 
   const { backupConfig } = job;
   const { application, destination } = backupConfig;
+
+  if (!destination) {
+    throw new BackupDomainError("Backup job has no configured destination", "NO_DESTINATION_CONFIGURED");
+  }
+
+  // Resolve provider from registry based on destination.type (H1)
+  const registry = options.destinationProviderRegistry ?? createDefaultDestinationProviderRegistry();
+  if (options.localDestinationProvider) {
+    registry.register(options.localDestinationProvider);
+  }
+  const destinationProvider = registry.resolve(destination);
 
   let currentStatus: BackupJobStatus = job.status as BackupJobStatus;
   let stagingDirectory: string | undefined;
@@ -133,6 +158,15 @@ export async function executeBackupJob(
     // --------------------------------------------------------------------------
     const startedAt = new Date();
     await updateJobState("INITIALIZING", { startedAt });
+
+    // H3/H4: Preflight check destination BEFORE creating staging/storage directories
+    const initHealth = await destinationProvider.preflight(destination);
+    if (initHealth.status !== "AVAILABLE") {
+      throw new BackupDomainError(
+        `Destination '${destination.name}' preflight check failed: ${initHealth.reasonCode ?? "DESTINATION_UNAVAILABLE"}${initHealth.detail ? ` (${initHealth.detail})` : ""}`,
+        initHealth.reasonCode ?? "DESTINATION_UNAVAILABLE",
+      );
+    }
 
     stagingDirectory = destinationProvider.resolveStagingDirectory(destination, jobId);
     targetStorageDir = destinationProvider.resolveStorageDirectory(destination, application.name);
@@ -432,15 +466,25 @@ export async function executeBackupJob(
     // --------------------------------------------------------------------------
     // 4. ATOMIC PROMOTION
     // --------------------------------------------------------------------------
+    // H3/H4: Pre-promotion re-check: verify destination is still mounted and marker is intact
+    const promoHealth = await destinationProvider.preflight(destination);
+    if (promoHealth.status !== "AVAILABLE") {
+      throw new BackupDomainError(
+        `Destination preflight check failed before promotion: ${promoHealth.reasonCode ?? "DESTINATION_UNAVAILABLE"}${promoHealth.detail ? ` (${promoHealth.detail})` : ""}`,
+        promoHealth.reasonCode ?? "DESTINATION_UNAVAILABLE",
+      );
+    }
+
     await mkdir(targetStorageDir, { recursive: true });
 
     const finalBundlePath = join(targetStorageDir, bundleFileName);
     const finalManifestPath = join(targetStorageDir, manifestFileName);
     const finalSha256Path = join(targetStorageDir, sha256FileName);
 
-    await atomicMoveFile(stagingBundlePath, finalBundlePath);
-    await atomicMoveFile(stagingManifestPath, finalManifestPath);
-    await atomicMoveFile(stagingSha256Path, finalSha256Path);
+    const allowCrossDevice = destination.type !== "SYNOLOGY_NAS";
+    await atomicMoveFile(stagingBundlePath, finalBundlePath, allowCrossDevice);
+    await atomicMoveFile(stagingManifestPath, finalManifestPath, allowCrossDevice);
+    await atomicMoveFile(stagingSha256Path, finalSha256Path, allowCrossDevice);
 
     // Clean up staging directory
     await rm(stagingDirectory, { recursive: true, force: true });

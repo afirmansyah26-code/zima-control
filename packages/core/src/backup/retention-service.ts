@@ -13,15 +13,23 @@
  * 6. Retention must be restart-safe.
  * 7. Path containment: delete ONLY artifacts within the designated destination storage path.
  * 8. Retention concurrency: prevent overlapping retention passes per application.
+ * 9. Per-Artifact Destination Resolution: resolve physical storage path via artifact.destinationId (H2).
+ * 10. Preflight-Gated Pruning: verify destination mount, marker, and containment before delete; fail closed on error (H3).
  *
  * Reference: docs/ZCC-SCHEDULER-AND-RETENTION.md (Sections 9, 10, 11, 12, 13, 14)
+ * Reference: docs/ZCC-SYNOLOGY-DESTINATION-DESIGN.md (Sections 5 & 9)
  */
 
 import { readdir, unlink, stat } from "node:fs/promises";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { PrismaClient } from "@prisma/client";
-import { LocalFilesystemDestinationProvider } from "./destination.js";
-import { BackupDomainError } from "./contracts.js";
+import {
+  type BackupDestinationProvider,
+  type BackupDestinationProviderRegistry,
+  createDefaultDestinationProviderRegistry,
+  LocalFilesystemDestinationProvider,
+} from "./destination.js";
+import { BackupDomainError, type BackupDestination } from "./contracts.js";
 
 export class RetentionExecutionError extends BackupDomainError {
   constructor(message: string, code = "RETENTION_EXECUTION_ERROR") {
@@ -45,7 +53,8 @@ export type ReconciliationAnomalyType =
   | "ARTIFACT_FILE_MISSING"
   | "BUNDLE_INCOMPLETE"
   | "ORPHAN_FILE_DETECTED"
-  | "PRUNED_FILE_PRESENT";
+  | "PRUNED_FILE_PRESENT"
+  | "DESTINATION_UNAVAILABLE";
 
 export interface ReconciliationAnomaly {
   anomalyType: ReconciliationAnomalyType;
@@ -66,11 +75,24 @@ export interface ReconciliationResult {
 
 export class BackupRetentionService {
   private activeLocks = new Set<string>();
+  private readonly registry: BackupDestinationProviderRegistry;
 
   constructor(
     private readonly prisma: PrismaClient,
-    private readonly destinationProvider: LocalFilesystemDestinationProvider = new LocalFilesystemDestinationProvider(),
-  ) {}
+    providerOrRegistry?: BackupDestinationProvider | BackupDestinationProviderRegistry,
+  ) {
+    if (
+      providerOrRegistry &&
+      typeof (providerOrRegistry as BackupDestinationProviderRegistry).resolve === "function"
+    ) {
+      this.registry = providerOrRegistry as BackupDestinationProviderRegistry;
+    } else if (providerOrRegistry) {
+      this.registry = createDefaultDestinationProviderRegistry();
+      this.registry.register(providerOrRegistry as BackupDestinationProvider);
+    } else {
+      this.registry = createDefaultDestinationProviderRegistry();
+    }
+  }
 
   /**
    * Enforces retention policy for a specific application.
@@ -145,7 +167,7 @@ export class BackupRetentionService {
       return bTime - aTime;
     });
 
-    // Rule 2: Active jobs (QUEUED, INITIALIZING, CAPTURING, VERIFYING)
+    // Active jobs: protect artifacts belonging to active jobs
     const activeJobs = await this.prisma.backupJob.findMany({
       where: {
         applicationId,
@@ -179,10 +201,24 @@ export class BackupRetentionService {
     const protectedArtifactIds: string[] = [];
     const errors: Array<{ artifactId: string; error: string }> = [];
 
-    const storageDirectory = this.destinationProvider.resolveStorageDirectory(
-      config.destination,
-      config.application.name,
+    // H2: Candidates may belong to different destinations.
+    // Fetch all destination records referenced by candidate artifacts.
+    const destIds = Array.from(new Set(candidates.map((c) => c.destinationId).filter(Boolean)));
+    const destinations: BackupDestination[] = (this.prisma as any).backupDestination?.findMany
+      ? await (this.prisma as any).backupDestination.findMany({
+          where: { id: { in: destIds } },
+        })
+      : [];
+    const destinationMap = new Map<string, BackupDestination>(
+      destinations.map((d: BackupDestination) => [d.id, { ...d, type: d.type ?? "LOCAL_FILESYSTEM" }]),
     );
+    if (config.destination) {
+      const normalizedDest: BackupDestination = {
+        ...config.destination,
+        type: config.destination.type ?? "LOCAL_FILESYSTEM",
+      };
+      destinationMap.set(config.destination.id, normalizedDest);
+    }
 
     // Current remaining count of verified artifacts
     let currentRemainingVerified = totalVerifiedCount;
@@ -199,6 +235,48 @@ export class BackupRetentionService {
         protectedArtifactIds.push(candidate.id);
         continue;
       }
+
+      // H2: Resolve destination for this specific historical artifact
+      let dest =
+        destinationMap.get(candidate.destinationId) ??
+        (config.destination?.id === candidate.destinationId ? config.destination : null) ??
+        (!candidate.destinationId ? config.destination : null);
+      if (!dest) {
+        errors.push({
+          artifactId: candidate.id,
+          error: `Destination '${candidate.destinationId}' not found for artifact '${candidate.id}'`,
+        });
+        continue;
+      }
+
+      dest = { ...dest, type: dest.type ?? "LOCAL_FILESYSTEM" };
+
+      let provider: BackupDestinationProvider;
+      try {
+        provider = this.registry.resolve(dest);
+      } catch (err: any) {
+        errors.push({
+          artifactId: candidate.id,
+          error: `Failed to resolve provider for destination '${dest.id}': ${err.message}`,
+        });
+        continue;
+      }
+
+      // H3: Preflight check before any deletion! If unmounted/unavailable, fail closed.
+      const health = await provider.preflight(dest);
+      if (health.status !== "AVAILABLE") {
+        errors.push({
+          artifactId: candidate.id,
+          error: `Destination '${dest.id}' unavailable for pruning: ${health.reasonCode ?? "DESTINATION_UNAVAILABLE"}${health.detail ? ` (${health.detail})` : ""}`,
+        });
+        // FAIL CLOSED: do not touch filesystem, do not update DB!
+        continue;
+      }
+
+      const storageDirectory = provider.resolveStorageDirectory(
+        dest,
+        config.application.name,
+      );
 
       // Validate bundle filename for path traversal
       const safeBundleName = basename(candidate.bundleFileName);
@@ -220,9 +298,9 @@ export class BackupRetentionService {
 
       // Enforce path containment: must be strictly inside storageDirectory
       if (
-        !this.isPathContained(bundlePath, storageDirectory) ||
-        !this.isPathContained(manifestPath, storageDirectory) ||
-        !this.isPathContained(sha256Path, storageDirectory)
+        !provider.isPathContained(bundlePath, storageDirectory) ||
+        !provider.isPathContained(manifestPath, storageDirectory) ||
+        !provider.isPathContained(sha256Path, storageDirectory)
       ) {
         errors.push({
           artifactId: candidate.id,
@@ -283,8 +361,12 @@ export class BackupRetentionService {
   /**
    * Reconciles storage directory with database records for safe anomaly detection.
    * Fail-closed: reports anomalies without making destructive guesses.
+   * Resolves artifacts per-destination (H2) and preflights destination availability (H3/H6).
    */
-  async reconcileStorage(applicationId: string): Promise<ReconciliationResult> {
+  async reconcileStorage(
+    applicationId: string,
+    targetDestinationId?: string,
+  ): Promise<ReconciliationResult> {
     const config = await this.prisma.backupConfig.findUnique({
       where: { applicationId },
       include: { destination: true, application: true },
@@ -297,130 +379,196 @@ export class BackupRetentionService {
       );
     }
 
-    const storageDirectory = this.destinationProvider.resolveStorageDirectory(
-      config.destination,
-      config.application.name,
-    );
-
-    // List all files currently on disk
-    let diskFiles: string[] = [];
-    try {
-      diskFiles = await readdir(storageDirectory);
-    } catch (err: any) {
-      if (err && err.code === "ENOENT") {
-        diskFiles = [];
-      } else {
-        throw err;
-      }
-    }
-
-    const diskFileSet = new Set(diskFiles);
-    const anomalies: ReconciliationAnomaly[] = [];
-
-    // Query all database artifact records
     const dbArtifacts = await this.prisma.backupArtifact.findMany({
       where: { applicationId },
       orderBy: { createdAt: "desc" },
     });
 
-    const recognizedDiskFiles = new Set<string>();
-
-    for (const artifact of dbArtifacts) {
-      const baseName = artifact.bundleFileName.replace(/\.tar\.zst$/, "");
-      const bundleFile = artifact.bundleFileName;
-      const manifestFile = `${baseName}.manifest.json`;
-      const sha256File = `${baseName}.sha256`;
-
-      recognizedDiskFiles.add(bundleFile);
-      recognizedDiskFiles.add(manifestFile);
-      recognizedDiskFiles.add(sha256File);
-
-      const hasBundle = diskFileSet.has(bundleFile);
-      const hasManifest = diskFileSet.has(manifestFile);
-      const hasSha256 = diskFileSet.has(sha256File);
-
-      if (artifact.isRetained) {
-        // Artifact should be present on disk
-        if (!hasBundle) {
-          anomalies.push({
-            anomalyType: "ARTIFACT_FILE_MISSING",
-            artifactId: artifact.id,
-            bundleFileName: artifact.bundleFileName,
-            fileName: bundleFile,
-            filePath: join(storageDirectory, bundleFile),
-            detail: `Database marks artifact as retained, but bundle file is missing on disk`,
-          });
-        }
-
-        if (!hasManifest) {
-          anomalies.push({
-            anomalyType: "BUNDLE_INCOMPLETE",
-            artifactId: artifact.id,
-            bundleFileName: artifact.bundleFileName,
-            fileName: manifestFile,
-            filePath: join(storageDirectory, manifestFile),
-            detail: `Retained artifact is missing its sidecar manifest file on disk`,
-          });
-        }
-
-        if (!hasSha256) {
-          anomalies.push({
-            anomalyType: "BUNDLE_INCOMPLETE",
-            artifactId: artifact.id,
-            bundleFileName: artifact.bundleFileName,
-            fileName: sha256File,
-            filePath: join(storageDirectory, sha256File),
-            detail: `Retained artifact is missing its sidecar sha256 checksum file on disk`,
-          });
-        }
-      } else {
-        // Artifact is marked pruned: files should NOT be present on disk
-        if (hasBundle || hasManifest || hasSha256) {
-          anomalies.push({
-            anomalyType: "PRUNED_FILE_PRESENT",
-            artifactId: artifact.id,
-            bundleFileName: artifact.bundleFileName,
-            fileName: hasBundle ? bundleFile : hasManifest ? manifestFile : sha256File,
-            filePath: join(
-              storageDirectory,
-              hasBundle ? bundleFile : hasManifest ? manifestFile : sha256File,
-            ),
-            detail: `Database marks artifact as pruned, but files still linger on disk`,
-          });
-        }
+    const destIds = new Set<string>();
+    if (targetDestinationId) {
+      destIds.add(targetDestinationId);
+    } else {
+      if (config.destinationId) destIds.add(config.destinationId);
+      for (const a of dbArtifacts) {
+        if (a.destinationId) destIds.add(a.destinationId);
       }
     }
 
-    // Check for orphan files on disk
-    for (const diskFile of diskFiles) {
-      if (!recognizedDiskFiles.has(diskFile)) {
-        // Filter out temporary files or dot-files if any
+    const destinations: BackupDestination[] = (this.prisma as any).backupDestination?.findMany
+      ? await (this.prisma as any).backupDestination.findMany({
+          where: { id: { in: Array.from(destIds) } },
+        })
+      : [];
+    const destinationMap = new Map<string, BackupDestination>(
+      destinations.map((d: BackupDestination) => [d.id, { ...d, type: d.type ?? "LOCAL_FILESYSTEM" }]),
+    );
+    if (config.destination) {
+      const normalizedDest: BackupDestination = {
+        ...config.destination,
+        type: config.destination.type ?? "LOCAL_FILESYSTEM",
+      };
+      destinationMap.set(config.destination.id, normalizedDest);
+    }
+
+    const normalizedConfigDest: BackupDestination = {
+      ...config.destination,
+      type: config.destination.type ?? "LOCAL_FILESYSTEM",
+    };
+    const defaultProvider = this.registry.resolve(normalizedConfigDest);
+    const primaryStorageDir = defaultProvider.resolveStorageDirectory(
+      normalizedConfigDest,
+      config.application.name,
+    );
+
+    const anomalies: ReconciliationAnomaly[] = [];
+    let totalFilesOnDisk = 0;
+
+    for (let dest of destinationMap.values()) {
+      dest = { ...dest, type: dest.type ?? "LOCAL_FILESYSTEM" };
+      let provider: BackupDestinationProvider;
+      try {
+        provider = this.registry.resolve(dest);
+      } catch (err: any) {
         anomalies.push({
-          anomalyType: "ORPHAN_FILE_DETECTED",
-          fileName: diskFile,
-          filePath: join(storageDirectory, diskFile),
-          detail: `File exists on disk without any matching BackupArtifact record in database`,
+          anomalyType: "DESTINATION_UNAVAILABLE",
+          fileName: "",
+          filePath: dest.basePath,
+          detail: `Cannot resolve destination provider for '${dest.id}': ${err.message}`,
         });
+        continue;
+      }
+
+      // Preflight destination before inspecting disk files (H3/H6)
+      const health = await provider.preflight(dest);
+      if (health.status !== "AVAILABLE") {
+        anomalies.push({
+          anomalyType: "DESTINATION_UNAVAILABLE",
+          fileName: "",
+          filePath: dest.basePath,
+          detail: `Destination '${dest.id}' (${dest.name}) is unavailable: ${health.reasonCode ?? "DESTINATION_UNAVAILABLE"}${health.detail ? ` (${health.detail})` : ""}`,
+        });
+        continue;
+      }
+
+      const storageDirectory = provider.resolveStorageDirectory(dest, config.application.name);
+      let diskFiles: string[] = [];
+      try {
+        diskFiles = await readdir(storageDirectory);
+      } catch (err: any) {
+        if (err && err.code === "ENOENT") {
+          diskFiles = [];
+        } else {
+          throw err;
+        }
+      }
+
+      totalFilesOnDisk += diskFiles.length;
+      const diskFileSet = new Set(diskFiles);
+      const recognizedDiskFiles = new Set<string>();
+
+      // Check artifacts that belong to this destination
+      const artifactsOnThisDest = dbArtifacts.filter(
+        (a) =>
+          a.destinationId === dest.id ||
+          (!a.destinationId && (dest.id === config.destinationId || dest.id === config.destination?.id)),
+      );
+
+      for (const artifact of artifactsOnThisDest) {
+        const baseName = artifact.bundleFileName.replace(/\.tar\.zst$/, "");
+        const bundleFile = artifact.bundleFileName;
+        const manifestFile = `${baseName}.manifest.json`;
+        const sha256File = `${baseName}.sha256`;
+
+        recognizedDiskFiles.add(bundleFile);
+        recognizedDiskFiles.add(manifestFile);
+        recognizedDiskFiles.add(sha256File);
+
+        const hasBundle = diskFileSet.has(bundleFile);
+        const hasManifest = diskFileSet.has(manifestFile);
+        const hasSha256 = diskFileSet.has(sha256File);
+
+        if (artifact.isRetained) {
+          if (!hasBundle) {
+            anomalies.push({
+              anomalyType: "ARTIFACT_FILE_MISSING",
+              artifactId: artifact.id,
+              bundleFileName: artifact.bundleFileName,
+              fileName: bundleFile,
+              filePath: join(storageDirectory, bundleFile),
+              detail: `Database marks artifact as retained, but bundle file is missing on disk in destination '${dest.name}'`,
+            });
+          }
+
+          if (!hasManifest) {
+            anomalies.push({
+              anomalyType: "BUNDLE_INCOMPLETE",
+              artifactId: artifact.id,
+              bundleFileName: artifact.bundleFileName,
+              fileName: manifestFile,
+              filePath: join(storageDirectory, manifestFile),
+              detail: `Retained artifact is missing its sidecar manifest file on disk in destination '${dest.name}'`,
+            });
+          }
+
+          if (!hasSha256) {
+            anomalies.push({
+              anomalyType: "BUNDLE_INCOMPLETE",
+              artifactId: artifact.id,
+              bundleFileName: artifact.bundleFileName,
+              fileName: sha256File,
+              filePath: join(storageDirectory, sha256File),
+              detail: `Retained artifact is missing its sidecar sha256 checksum file on disk in destination '${dest.name}'`,
+            });
+          }
+        } else {
+          if (hasBundle || hasManifest || hasSha256) {
+            anomalies.push({
+              anomalyType: "PRUNED_FILE_PRESENT",
+              artifactId: artifact.id,
+              bundleFileName: artifact.bundleFileName,
+              fileName: hasBundle ? bundleFile : hasManifest ? manifestFile : sha256File,
+              filePath: join(
+                storageDirectory,
+                hasBundle ? bundleFile : hasManifest ? manifestFile : sha256File,
+              ),
+              detail: `Database marks artifact as pruned, but files still linger on disk in destination '${dest.name}'`,
+            });
+          }
+        }
+      }
+
+      // Check for orphan files on disk for this destination
+      for (const diskFile of diskFiles) {
+        if (!recognizedDiskFiles.has(diskFile)) {
+          anomalies.push({
+            anomalyType: "ORPHAN_FILE_DETECTED",
+            fileName: diskFile,
+            filePath: join(storageDirectory, diskFile),
+            detail: `File exists on disk without any matching BackupArtifact record for destination '${dest.name}'`,
+          });
+        }
       }
     }
 
     return {
       applicationId,
-      storageDirectory,
+      storageDirectory: primaryStorageDir,
       totalArtifactsChecked: dbArtifacts.length,
-      totalFilesOnDisk: diskFiles.length,
+      totalFilesOnDisk,
       anomalies,
     };
   }
 
-  private isPathContained(targetPath: string, rootDir: string): boolean {
+  public isPathContained(targetPath: string, rootDir: string): boolean {
     const resolvedTarget = resolve(targetPath);
     const resolvedRoot = resolve(rootDir);
-    return (
-      resolvedTarget.startsWith(resolvedRoot) &&
-      resolvedTarget.length > resolvedRoot.length &&
-      (resolvedTarget[resolvedRoot.length] === "/" ||
-        resolvedTarget[resolvedRoot.length] === "\\")
-    );
+    if (!resolvedTarget.startsWith(resolvedRoot)) {
+      return false;
+    }
+    if (resolvedTarget.length === resolvedRoot.length) {
+      return true;
+    }
+    const sep = resolvedTarget[resolvedRoot.length];
+    return sep === "/" || sep === "\\";
   }
 }

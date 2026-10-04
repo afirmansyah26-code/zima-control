@@ -2,7 +2,7 @@ import { PrismaClient } from "@prisma/client";
 import {
   validateProductionSqliteDatabaseUrl,
   BackupOrchestratorService,
-  LocalFilesystemDestinationProvider,
+  createDefaultDestinationProviderRegistry,
   DatabaseSourceProvider,
   EnvironmentDatabaseSecretResolver,
   type DiscoveryResult,
@@ -141,7 +141,7 @@ export function createWorkerRuntime(config: WorkerRuntimeConfig): WorkerRuntime 
   });
   const backupOrchestrator = new BackupOrchestratorService(
     prisma,
-    new LocalFilesystemDestinationProvider(),
+    createDefaultDestinationProviderRegistry(),
     new DatabaseSourceProvider({
       secretResolver: new EnvironmentDatabaseSecretResolver(),
     }),
