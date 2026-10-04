@@ -20,4 +20,6 @@ export * from "./mariadb-provider.js";
 export * from "./mysql-provider.js";
 export * from "./database-source.js";
 export * from "./cron-validator.js";
+export * from "./cron-evaluator.js";
+export * from "./retention-service.js";
 export * from "./orchestrator.js";

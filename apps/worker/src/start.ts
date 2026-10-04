@@ -81,6 +81,11 @@ export function safeWorkerLogRecord(event: WorkerLogEvent): Record<string, strin
     ...(event.discoveredCount === undefined ? {} : { discoveredCount: event.discoveredCount }),
     ...(event.observedCount === undefined ? {} : { observedCount: event.observedCount }),
     ...(event.failureCount === undefined ? {} : { failureCount: event.failureCount }),
+    ...(event.applicationId ? { applicationId: event.applicationId } : {}),
+    ...(event.jobId ? { jobId: event.jobId } : {}),
+    ...(event.artifactId ? { artifactId: event.artifactId } : {}),
+    ...(event.outcome ? { outcome: event.outcome } : {}),
+    ...(event.detail ? { detail: event.detail } : {}),
   };
 }
 

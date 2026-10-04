@@ -64,6 +64,11 @@ export type WorkerLogEvent = {
   discoveredCount?: number;
   observedCount?: number;
   failureCount?: number;
+  applicationId?: string;
+  jobId?: string;
+  artifactId?: string;
+  outcome?: string;
+  detail?: string;
 };
 
 export function readWorkerRuntimeConfig(environment: EnvironmentSource): WorkerRuntimeConfig {
@@ -247,6 +252,42 @@ export async function runWorkerCycle(
   await reconcileAuthoritativeRuntimeObservations(runtime, result, log);
 
   if (runtime.backupOrchestrator) {
+    // 1. Scheduler Tick: evaluate due schedules deterministically (Section 1, 6)
+    try {
+      const scheduleResults = await runtime.backupOrchestrator.evaluateDueSchedules();
+      for (const res of scheduleResults) {
+        if (res.outcome === "ENQUEUED") {
+          log({
+            level: "info",
+            event: "scheduled_job_enqueued",
+            applicationId: res.applicationId,
+            jobId: res.jobId,
+          });
+        } else if (res.outcome === "SKIPPED_ACTIVE_JOB") {
+          log({
+            level: "info",
+            event: "scheduled_job_skipped_active_exists",
+            applicationId: res.applicationId,
+          });
+        } else if (res.outcome === "INVALID_CRON") {
+          log({
+            level: "error",
+            event: "scheduler_invalid_cron",
+            applicationId: res.applicationId,
+            errorCode: "INVALID_CRON",
+            detail: res.error,
+          });
+        }
+      }
+    } catch {
+      log({
+        level: "error",
+        event: "scheduler_tick_failed",
+        errorCode: "SCHEDULER_TICK_ERROR",
+      });
+    }
+
+    // 2. Job Execution: process queued backup job (Section 1, 6)
     try {
       const backupResult = await runtime.backupOrchestrator.processNextQueuedJob();
       if (backupResult) {

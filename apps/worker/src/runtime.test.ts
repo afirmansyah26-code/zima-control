@@ -440,3 +440,49 @@ test("startWorkerLoop recovers stale backup jobs on startup", async () => {
 
   assert.equal(recoveryRan, true);
 });
+
+test("runWorkerCycle executes scheduler tick and logs scheduled job enqueued / skipped events", async () => {
+  let schedulerEvaluated = false;
+  const events: WorkerLogEvent[] = [];
+
+  const runtime: WorkerRuntime = {
+    discovery: {
+      discover: async () => ({ discovered: [], failures: [] }),
+    },
+    gateway: {} as any,
+    getActiveDeployments: async () => [],
+    observeApplicationStatus: async () => ({} as any),
+    observeApplicationInspection: async () => ({} as any),
+    backupOrchestrator: {
+      evaluateDueSchedules: async () => {
+        schedulerEvaluated = true;
+        return [
+          {
+            applicationId: "app-due-1",
+            outcome: "ENQUEUED",
+            jobId: "sched-job-1",
+          },
+          {
+            applicationId: "app-skipped-2",
+            outcome: "SKIPPED_ACTIVE_JOB",
+          },
+        ];
+      },
+      processNextQueuedJob: async () => null,
+      recoverStaleBackupJobs: async () => 0,
+    } as any,
+    disconnect: async () => {},
+  };
+
+  await runWorkerOnce(runtime, (e) => events.push(e));
+
+  assert.equal(schedulerEvaluated, true);
+  const enqueuedEvent = events.find((e) => e.event === "scheduled_job_enqueued");
+  assert.ok(enqueuedEvent);
+  assert.equal(enqueuedEvent.applicationId, "app-due-1");
+  assert.equal(enqueuedEvent.jobId, "sched-job-1");
+
+  const skippedEvent = events.find((e) => e.event === "scheduled_job_skipped_active_exists");
+  assert.ok(skippedEvent);
+  assert.equal(skippedEvent.applicationId, "app-skipped-2");
+});

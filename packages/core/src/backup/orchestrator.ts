@@ -19,9 +19,31 @@ import {
 } from "./contracts.js";
 import { validatePersistentFilesHostPath } from "./source.js";
 import { validateCronExpression } from "./cron-validator.js";
+import { checkScheduleDue, getNextCronOccurrence, getPreviousCronOccurrence } from "./cron-evaluator.js";
+import {
+  BackupRetentionService,
+  type RetentionPruneResult,
+  type ReconciliationResult,
+} from "./retention-service.js";
 import { LocalFilesystemDestinationProvider } from "./destination.js";
 import { DatabaseSourceProvider } from "./database-source.js";
 import { executeBackupJob, type BackupJobExecutionResult } from "./backup-service.js";
+
+export type ScheduledTriggerOutcome =
+  | "ENQUEUED"
+  | "SKIPPED_ACTIVE_JOB"
+  | "NOT_DUE"
+  | "NO_CRON"
+  | "INVALID_CRON";
+
+export interface ScheduledTriggerResult {
+  applicationId: string;
+  outcome: ScheduledTriggerOutcome;
+  jobId?: string;
+  dueSlot?: Date;
+  nextRun?: Date;
+  error?: string;
+}
 
 // ==============================================================================
 // ERROR DEFINITIONS
@@ -184,6 +206,7 @@ export interface BackupHistoryItem {
     verificationStatus: string;
     verifiedAt: Date | null;
     isRetained: boolean;
+    prunedAt?: Date | null;
   } | null;
   sourcesSummary: Array<{
     sourceName: string;
@@ -246,6 +269,7 @@ export interface BackupHistoryDetailResult {
     verificationStatus: string;
     verifiedAt: Date | null;
     isRetained: boolean;
+    prunedAt?: Date | null;
     createdAt: Date;
     verificationRecords?: Array<{
       id: string;
@@ -263,11 +287,18 @@ export interface BackupHistoryDetailResult {
 // ==============================================================================
 
 export class BackupOrchestratorService {
+  private readonly retentionService: BackupRetentionService;
+
   constructor(
     private readonly prisma: PrismaClient,
     private readonly localDestinationProvider?: LocalFilesystemDestinationProvider,
     private readonly databaseSourceProvider?: DatabaseSourceProvider,
-  ) {}
+  ) {
+    this.retentionService = new BackupRetentionService(
+      this.prisma,
+      this.localDestinationProvider ?? new LocalFilesystemDestinationProvider(),
+    );
+  }
 
   private async resolveApp(identifier: string) {
     const app = await this.prisma.application.findFirst({
@@ -759,6 +790,7 @@ export class BackupOrchestratorService {
             verificationStatus: j.artifact.verificationStatus,
             verifiedAt: j.artifact.verifiedAt,
             isRetained: j.artifact.isRetained,
+            prunedAt: j.artifact.prunedAt,
           }
         : null,
       sourcesSummary: j.sourceTasks.map((t) => ({
@@ -859,6 +891,7 @@ export class BackupOrchestratorService {
             verificationStatus: job.artifact.verificationStatus,
             verifiedAt: job.artifact.verifiedAt,
             isRetained: job.artifact.isRetained,
+            prunedAt: job.artifact.prunedAt,
             createdAt: job.artifact.createdAt,
             verificationRecords: (job.artifact as any).verifications?.map((v: any) => ({
               id: v.id,
@@ -960,11 +993,215 @@ export class BackupOrchestratorService {
       return null;
     }
 
-    return await executeBackupJob({
+    const result = await executeBackupJob({
       jobId: queuedJob.id,
       prisma: this.prisma,
       localDestinationProvider: this.localDestinationProvider,
       databaseSourceProvider: this.databaseSourceProvider,
     });
+
+    // Run retention immediately upon successful VERIFIED backup completion (Section 12)
+    if (result.status === "COMPLETED") {
+      try {
+        await this.retentionService.pruneApplicationBackups(queuedJob.applicationId);
+      } catch {
+        // Retention failure does not turn completed job to failed
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Evaluates all enabled backup configurations for due schedules (Section 1, 6, 7).
+   * Enqueues at most one SCHEDULED job per application per due occurrence (Section 4).
+   * Honors duplicate prevention: if an active job (MANUAL or SCHEDULED) is running, skips enqueuing (Section 5).
+   */
+  async evaluateDueSchedules(now: Date = new Date()): Promise<ScheduledTriggerResult[]> {
+    const configs = await this.prisma.backupConfig.findMany({
+      where: {
+        status: "ENABLED",
+        scheduleCron: { not: null },
+      },
+      include: {
+        sources: true,
+      },
+    });
+
+    const results: ScheduledTriggerResult[] = [];
+
+    for (const config of configs) {
+      if (!config.scheduleCron || config.sources.length === 0) {
+        results.push({
+          applicationId: config.applicationId,
+          outcome: "NO_CRON",
+        });
+        continue;
+      }
+
+      if (!validateCronExpression(config.scheduleCron)) {
+        results.push({
+          applicationId: config.applicationId,
+          outcome: "INVALID_CRON",
+          error: `Invalid cron expression '${config.scheduleCron}'`,
+        });
+        continue;
+      }
+
+      // Find latest scheduled job to determine last scheduled timestamp
+      const latestScheduledJob = await this.prisma.backupJob.findFirst({
+        where: {
+          applicationId: config.applicationId,
+          triggerType: "SCHEDULED",
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      // If never scheduled, use config createdAt
+      const lastScheduledTime = latestScheduledJob?.createdAt ?? config.createdAt;
+      const { isDue, dueSlot, nextRun } = checkScheduleDue(
+        config.scheduleCron,
+        lastScheduledTime,
+        now,
+      );
+
+      if (!isDue) {
+        results.push({
+          applicationId: config.applicationId,
+          outcome: "NOT_DUE",
+          nextRun,
+        });
+        continue;
+      }
+
+      // Check if an active backup job is already running
+      const activeJob = await this.prisma.backupJob.findFirst({
+        where: {
+          applicationId: config.applicationId,
+          status: { in: ["QUEUED", "INITIALIZING", "CAPTURING", "VERIFYING"] },
+        },
+      });
+
+      if (activeJob) {
+        results.push({
+          applicationId: config.applicationId,
+          outcome: "SKIPPED_ACTIVE_JOB",
+          dueSlot,
+          nextRun,
+          error: "Active backup job already in progress for this application",
+        });
+        continue;
+      }
+
+      // Enqueue deterministically in a transaction with re-check
+      const enqueuedJob = await this.prisma.$transaction(async (tx) => {
+        const existingActive = await tx.backupJob.findFirst({
+          where: {
+            applicationId: config.applicationId,
+            status: { in: ["QUEUED", "INITIALIZING", "CAPTURING", "VERIFYING"] },
+          },
+        });
+        if (existingActive) return null;
+
+        return tx.backupJob.create({
+          data: {
+            applicationId: config.applicationId,
+            backupConfigId: config.id,
+            triggerType: "SCHEDULED",
+            status: "QUEUED",
+            actorId: null,
+            createdAt: now,
+          },
+        });
+      });
+
+      if (enqueuedJob) {
+        results.push({
+          applicationId: config.applicationId,
+          outcome: "ENQUEUED",
+          jobId: enqueuedJob.id,
+          dueSlot,
+          nextRun,
+        });
+      } else {
+        results.push({
+          applicationId: config.applicationId,
+          outcome: "SKIPPED_ACTIVE_JOB",
+          dueSlot,
+          nextRun,
+          error: "Active backup job already in progress for this application",
+        });
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Explicitly runs retention policy pruning for an application.
+   */
+  async pruneApplicationBackups(applicationId: string): Promise<RetentionPruneResult> {
+    const app = await this.resolveApp(applicationId);
+    return this.retentionService.pruneApplicationBackups(app.id);
+  }
+
+  /**
+   * Reconciles application backup storage directory against database records.
+   */
+  async reconcileApplicationStorage(applicationId: string): Promise<ReconciliationResult> {
+    const app = await this.resolveApp(applicationId);
+    return this.retentionService.reconcileStorage(app.id);
+  }
+
+  /**
+   * Retrieves deterministic schedule status for an application.
+   */
+  async getApplicationScheduleStatus(
+    applicationId: string,
+    now: Date = new Date(),
+  ): Promise<{
+    scheduleCron: string | null;
+    isDue: boolean;
+    dueSlot: Date | null;
+    nextRun: Date | null;
+    lastScheduledRun: Date | null;
+  }> {
+    const app = await this.resolveApp(applicationId);
+    const config = await this.prisma.backupConfig.findUnique({
+      where: { applicationId: app.id },
+    });
+
+    if (!config || config.status !== "ENABLED" || !config.scheduleCron) {
+      return {
+        scheduleCron: config?.scheduleCron ?? null,
+        isDue: false,
+        dueSlot: null,
+        nextRun: null,
+        lastScheduledRun: null,
+      };
+    }
+
+    const latestScheduledJob = await this.prisma.backupJob.findFirst({
+      where: {
+        applicationId: app.id,
+        triggerType: "SCHEDULED",
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const lastScheduledTime = latestScheduledJob?.createdAt ?? config.createdAt;
+    const { isDue, dueSlot, nextRun } = checkScheduleDue(
+      config.scheduleCron,
+      lastScheduledTime,
+      now,
+    );
+
+    return {
+      scheduleCron: config.scheduleCron,
+      isDue,
+      dueSlot,
+      nextRun,
+      lastScheduledRun: latestScheduledJob?.createdAt ?? null,
+    };
   }
 }
