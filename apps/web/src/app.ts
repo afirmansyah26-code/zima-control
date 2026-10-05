@@ -2,6 +2,7 @@ import type { AuthRole } from "@zima-control-center/application-registry-contrac
 import { AuthApiError, type AuthApiClient } from "./auth-api.js";
 import { createBackupApiClient, type BackupApiClient } from "./backup-api.js";
 import { renderBackupDetailPage, renderBackupHistoryPage } from "./backup-ui.js";
+import { renderBackupDestinationsPage } from "./destination-ui.js";
 import type { RegistryApiClient } from "./registry-api.js";
 import {
   createDashboardShell,
@@ -187,6 +188,17 @@ async function renderRegistryRoute(
     return;
   }
 
+  if (route.kind === "backup-destinations") {
+    await renderBackupDestinationsPage(
+      content,
+      backupApi,
+      clock,
+      navigate ?? (() => {}),
+      userRole,
+    );
+    return;
+  }
+
   renderRouteNotFound(content);
 }
 
@@ -195,6 +207,7 @@ type DashboardRoute =
   | { kind: "application-detail"; id: string }
   | { kind: "backups"; applicationId?: string }
   | { kind: "backup-detail"; id: string }
+  | { kind: "backup-destinations" }
   | { kind: "not-found" };
 
 export function parseRoute(pathname: string): DashboardRoute {
@@ -203,6 +216,10 @@ export function parseRoute(pathname: string): DashboardRoute {
 
   if (normalized === "/" || normalized === "/applications") {
     return { kind: "applications" };
+  }
+
+  if (normalized === "/backup-destinations") {
+    return { kind: "backup-destinations" };
   }
 
   const detailMatch = /^\/applications\/([^/]+)$/.exec(normalized);

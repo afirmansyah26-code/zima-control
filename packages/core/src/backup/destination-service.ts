@@ -176,7 +176,7 @@ export class BackupDestinationService {
       if (type === "LOCAL_FILESYSTEM") {
         basePath = process.env.BACKUP_STORAGE_DIR || "/DATA/AppData/zima-control-center/backups";
       } else {
-        throw new BackupDestinationInvalidError("basePath is required for Synology NAS destination");
+        basePath = `/zcc-destinations/${trimmedName.toLowerCase().replace(/[^a-z0-9_-]/g, "-")}`;
       }
     }
     assertApprovedBasePath(type, basePath);
@@ -190,7 +190,20 @@ export class BackupDestinationService {
     }
 
     // 6. Resolve destinationId (use provided id, or existing marker id, or generate new UUID)
-    const destinationId = input.id?.trim() || randomUUID();
+    let destinationId = input.id?.trim();
+    if (!destinationId && type === "SYNOLOGY_NAS") {
+      try {
+        const marker = await readDestinationIdentityMarker(basePath);
+        if (marker?.destinationId) {
+          destinationId = marker.destinationId;
+        }
+      } catch {
+        // ignore marker read error at resolution step
+      }
+    }
+    if (!destinationId) {
+      destinationId = randomUUID();
+    }
     if (input.id && !/^[a-zA-Z0-9_-]{3,64}$/.test(destinationId)) {
       throw new BackupDestinationInvalidError(`Invalid destination ID format: '${input.id}'`);
     }

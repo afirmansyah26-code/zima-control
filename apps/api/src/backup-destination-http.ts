@@ -105,9 +105,9 @@ export function installBackupDestinationRoutes(
   });
 
   // --------------------------------------------------------------------------
-  // 4. PATCH /api/backup-destinations/:id (Update destination - Admin only)
+  // 4. PATCH & PUT /api/backup-destinations/:id (Update destination - Admin only)
   // --------------------------------------------------------------------------
-  app.patch("/api/backup-destinations/:id", async (context: Context) => {
+  const handleUpdate = async (context: Context) => {
     try {
       const user = await getUser(context);
       requireRole(user, "ADMIN");
@@ -120,7 +120,9 @@ export function installBackupDestinationRoutes(
     } catch (err) {
       return handleDestinationError(context, err);
     }
-  });
+  };
+  app.patch("/api/backup-destinations/:id", handleUpdate);
+  app.put("/api/backup-destinations/:id", handleUpdate);
 
   // --------------------------------------------------------------------------
   // 5. POST /api/backup-destinations/:id/validate (Preflight check - Operator/Admin)

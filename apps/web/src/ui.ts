@@ -46,8 +46,9 @@ export function createDashboardShell(
     });
   }
 
-  const isBackups = currentPath.startsWith("/backups");
-  const isApps = !isBackups;
+  const isDestinations = currentPath.startsWith("/backup-destinations");
+  const isBackups = !isDestinations && currentPath.startsWith("/backups");
+  const isApps = !isDestinations && !isBackups;
 
   const navLinkApps = element(document, "a", isApps ? "nav-link active" : "nav-link");
   navLinkApps.href = "/applications";
@@ -85,9 +86,27 @@ export function createDashboardShell(
     });
   }
 
+  const navLinkDestinations = element(document, "a", isDestinations ? "nav-link active" : "nav-link");
+  navLinkDestinations.href = "/backup-destinations";
+  if (isDestinations) {
+    navLinkDestinations.setAttribute("aria-current", "page");
+  }
+  const navIconDestinations = element(document, "span", "nav-icon", "⛁");
+  navIconDestinations.setAttribute("aria-hidden", "true");
+  navLinkDestinations.append(
+    navIconDestinations,
+    element(document, "span", undefined, "Destinations"),
+  );
+  if (navigate) {
+    navLinkDestinations.addEventListener("click", (e) => {
+      e.preventDefault();
+      navigate("/backup-destinations");
+    });
+  }
+
   const navigation = element(document, "nav", "primary-nav");
   navigation.setAttribute("aria-label", "Primary navigation");
-  navigation.append(navLinkApps, navLinkBackups);
+  navigation.append(navLinkApps, navLinkBackups, navLinkDestinations);
 
   const environment = element(document, "div", "environment-chip");
   const environmentDot = element(document, "span", "environment-dot");

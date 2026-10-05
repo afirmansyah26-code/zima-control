@@ -11,7 +11,7 @@ import { normalizeApiBaseUrl, type FetchImplementation } from "./registry-api.js
 export type BackupEnabledStatus = "ENABLED" | "DISABLED";
 export type BackupSourceType = "DATABASE" | "PERSISTENT_FILES";
 export type DatabaseEngineType = "MARIADB" | "MYSQL";
-export type DestinationType = "LOCAL_FILESYSTEM";
+export type DestinationType = "LOCAL_FILESYSTEM" | "SYNOLOGY_NAS";
 export type BackupJobStatus =
   | "QUEUED"
   | "INITIALIZING"
@@ -22,6 +22,63 @@ export type BackupJobStatus =
   | "CANCELLED";
 export type BackupTriggerType = "MANUAL" | "SCHEDULED";
 export type VerificationStatus = "PENDING" | "VERIFIED" | "VERIFICATION_FAILED";
+
+export interface DestinationHealthDto {
+  status: "HEALTHY" | "UNAVAILABLE" | string;
+  mounted: boolean;
+  writable: boolean;
+  availableBytes: number | string | null;
+  capacityBytes: number | string | null;
+  reason?: string | null;
+  checkedAt?: string;
+}
+
+export interface DestinationDependenciesDto {
+  activeJobsCount: number;
+  activeConfigsCount: number;
+  retainedArtifactsCount: number;
+}
+
+export interface BackupDestinationSummaryDto {
+  id: string;
+  name: string;
+  type: DestinationType | string;
+  basePath: string;
+  isActive: boolean;
+  displayLocation: string;
+  health: DestinationHealthDto;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface BackupDestinationDetailDto extends BackupDestinationSummaryDto {
+  dependencies: DestinationDependenciesDto;
+}
+
+export interface BackupDestinationValidationResultDto {
+  destinationId: string;
+  type: string;
+  status: "HEALTHY" | "UNAVAILABLE" | string;
+  mounted: boolean;
+  writable: boolean;
+  capacityBytes: number | string | null;
+  availableBytes: number | string | null;
+  reason?: string | null;
+  detail?: string | null;
+  checkedAt: string;
+}
+
+export interface CreateBackupDestinationInputDto {
+  id?: string;
+  name: string;
+  type: DestinationType;
+  basePath?: string;
+}
+
+export interface UpdateBackupDestinationInputDto {
+  name?: string;
+  basePath?: string;
+}
 
 export interface BackupDestinationDto {
   id: string;
@@ -125,6 +182,7 @@ export interface BackupHistoryItemDto {
   createdAt: string;
   artifact: {
     id: string;
+    destinationId?: string;
     bundleFileName: string;
     bundleSizeBytes: string;
     uncompressedBytes: string;
@@ -258,6 +316,14 @@ export function mapBackupErrorMessage(code: BackupApiErrorCode): string {
       return "Authentication is required. Please sign in.";
     case "BACKUP_ALREADY_RUNNING":
       return "A backup is already running for this application.";
+    case "BACKUP_DESTINATION_NOT_FOUND":
+      return "Backup destination not found.";
+    case "BACKUP_DESTINATION_CONFLICT":
+      return "Destination conflict: a destination with this name or identifier already exists, or has active dependencies.";
+    case "BACKUP_DESTINATION_UNAVAILABLE":
+      return "Backup destination is currently unavailable or unmounted.";
+    case "BACKUP_DESTINATION_INVALID":
+      return "Invalid backup destination parameters or unauthorized storage path.";
     default:
       return "An unexpected backup error occurred.";
   }
@@ -276,6 +342,15 @@ export interface BackupApiClient {
   runBackupNow(applicationId: string): Promise<TriggerBackupResponse>;
   listBackupHistory(options?: BackupHistoryFilterOptions): Promise<BackupHistoryListResponse>;
   getBackupDetail(jobId: string): Promise<BackupDetailResponse>;
+
+  // Destination Management endpoints (Phase 8.1 / 8.2)
+  listDestinations(): Promise<BackupDestinationSummaryDto[]>;
+  getDestination(id: string): Promise<BackupDestinationDetailDto>;
+  createDestination(input: CreateBackupDestinationInputDto): Promise<BackupDestinationSummaryDto>;
+  updateDestination(id: string, input: UpdateBackupDestinationInputDto): Promise<BackupDestinationSummaryDto>;
+  validateDestination(id: string): Promise<BackupDestinationValidationResultDto>;
+  enableDestination(id: string): Promise<BackupDestinationSummaryDto>;
+  disableDestination(id: string, options?: { force?: boolean }): Promise<{ id: string; isActive: boolean }>;
 }
 
 export interface BackupApiClientOptions {
@@ -408,6 +483,82 @@ export function createBackupApiClient(options: BackupApiClientOptions = {}): Bac
     async getBackupDetail(jobId: string) {
       const safeId = encodeURIComponent(jobId.trim());
       return requestApi<BackupDetailResponse>(`${baseUrl}/api/backups/${safeId}`);
+    },
+
+    async listDestinations() {
+      const res = await requestApi<{ destinations: BackupDestinationSummaryDto[] }>(
+        `${baseUrl}/api/backup-destinations`,
+      );
+      return res.destinations;
+    },
+
+    async getDestination(id: string) {
+      const safeId = encodeURIComponent(id.trim());
+      const res = await requestApi<{ destination: BackupDestinationDetailDto }>(
+        `${baseUrl}/api/backup-destinations/${safeId}`,
+      );
+      return res.destination;
+    },
+
+    async createDestination(input: CreateBackupDestinationInputDto) {
+      const res = await requestApi<{ destination: BackupDestinationSummaryDto }>(
+        `${baseUrl}/api/backup-destinations`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input),
+        },
+      );
+      return res.destination;
+    },
+
+    async updateDestination(id: string, input: UpdateBackupDestinationInputDto) {
+      const safeId = encodeURIComponent(id.trim());
+      const res = await requestApi<{ destination: BackupDestinationSummaryDto }>(
+        `${baseUrl}/api/backup-destinations/${safeId}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(input),
+        },
+      );
+      return res.destination;
+    },
+
+    async validateDestination(id: string) {
+      const safeId = encodeURIComponent(id.trim());
+      const res = await requestApi<{ validation: BackupDestinationValidationResultDto }>(
+        `${baseUrl}/api/backup-destinations/${safeId}/validate`,
+        {
+          method: "POST",
+        },
+      );
+      return res.validation;
+    },
+
+    async enableDestination(id: string) {
+      const safeId = encodeURIComponent(id.trim());
+      const res = await requestApi<{ destination: BackupDestinationSummaryDto }>(
+        `${baseUrl}/api/backup-destinations/${safeId}/enable`,
+        {
+          method: "POST",
+        },
+      );
+      return res.destination;
+    },
+
+    async disableDestination(id: string, options?: { force?: boolean }) {
+      const safeId = encodeURIComponent(id.trim());
+      const qs = options?.force ? "?force=true" : "";
+      const res = await requestApi<{ destination: { id: string; isActive: boolean } }>(
+        `${baseUrl}/api/backup-destinations/${safeId}/disable${qs}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ force: options?.force === true }),
+        },
+      );
+      return res.destination;
     },
   };
 }

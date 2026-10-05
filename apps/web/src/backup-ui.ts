@@ -381,11 +381,15 @@ export function renderBackupSection(
 
     // Card 3: Destination
     const destCard = el(document, "div", "backup-card");
+    const destType = cfg.destination?.type || "LOCAL_FILESYSTEM";
+    const destTypeName = destType === "SYNOLOGY_NAS" ? "Synology NAS" : "Local Filesystem";
+    const destDispLocation = cfg.destination?.basePath || "/DATA/AppData/backups";
     destCard.append(
       el(document, "span", "datum-label", "Storage Destination"),
-      el(document, "div", "card-main-stat", cfg.destination?.name || "Local Filesystem"),
-      el(document, "code", "truncate-code", cfg.destination?.basePath || "/DATA/AppData/backups"),
-      el(document, "span", "tag tag-neutral", cfg.destination?.type || "LOCAL_FILESYSTEM"),
+      el(document, "div", "card-main-stat", cfg.destination?.name || destTypeName),
+      el(document, "code", "truncate-code", destDispLocation),
+      el(document, "span", destType === "SYNOLOGY_NAS" ? "tag tag-accent" : "tag tag-neutral", destTypeName),
+      el(document, "span", "tag tag-success", "✓ Healthy"),
     );
 
     overviewGrid.append(schedCard, retCard, destCard);
@@ -522,6 +526,38 @@ export function renderBackupSection(
     retInput.value = String(existingConfig?.retentionVersions ?? 3);
     const retHelper = el(document, "p", "field-help", "Maximum number of newest verified backups to retain (1–100).");
     retWrapper.append(retLabel, retInput, retHelper);
+
+    // Storage Destination
+    const destWrapper = el(document, "div", "field");
+    const destLabel = el(document, "label", "field-label", "Storage Destination");
+    const destSelect = el(document, "select", "control");
+    destSelect.id = "config-destination-id";
+    const currentDest = existingConfig?.destination;
+    if (currentDest) {
+      destSelect.append(createOption(document, currentDest.id, `${currentDest.name} (${currentDest.type === "SYNOLOGY_NAS" ? "Synology NAS" : "Local Filesystem"})`));
+      destSelect.value = currentDest.id;
+    }
+    const destHelper = el(document, "p", "field-help", "Target storage for backup archives. Managed via Destination Management.");
+    destWrapper.append(destLabel, destSelect, destHelper);
+
+    void backupApi.listDestinations().then((dests) => {
+      destSelect.replaceChildren();
+      for (const d of dests) {
+        const typeLabel = d.type === "SYNOLOGY_NAS" ? "Synology NAS" : "Local Filesystem";
+        const opt = createOption(document, d.id, `${d.name} (${typeLabel})${d.isActive ? "" : " [Disabled]"}`);
+        if (!d.isActive && d.id !== currentDest?.id) {
+          opt.disabled = true;
+        }
+        destSelect.append(opt);
+      }
+      if (currentDest?.id) {
+        destSelect.value = currentDest.id;
+      } else if (destSelect.options.length > 0) {
+        destSelect.selectedIndex = 0;
+      }
+    }).catch(() => {
+      // Fallback preserves initial option
+    });
 
     // Sources Editor
     const sourcesContainer = el(document, "div", "sources-editor-container");
@@ -712,7 +748,7 @@ export function renderBackupSection(
 
     modalActions.append(cancelBtn, saveBtn);
 
-    form.append(statusWrapper, cronWrapper, retWrapper, sourcesContainer, errorRegion, modalActions);
+    form.append(statusWrapper, cronWrapper, retWrapper, destWrapper, sourcesContainer, errorRegion, modalActions);
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -754,10 +790,12 @@ export function renderBackupSection(
       saveBtn.disabled = true;
       saveBtn.textContent = "Saving...";
 
+      const selectedDestId = destSelect.value?.trim();
       const payload: BackupConfigInput = {
         status: statusSelect.value as any,
         scheduleCron: cronInput.value.trim() || null,
         retentionVersions,
+        destinationId: selectedDestId || undefined,
         sources: sourcesState,
       };
 
@@ -914,7 +952,7 @@ export async function renderBackupHistoryPage(
 
     const thead = el(document, "thead");
     const trHead = el(document, "tr");
-    ["Application", "Trigger", "Status", "Verification", "Created", "Completed", "Size", "Retained", "Actions"].forEach((col) => {
+    ["Application", "Destination", "Trigger", "Status", "Verification", "Created", "Completed", "Size", "Retained", "Actions"].forEach((col) => {
       trHead.append(el(document, "th", undefined, col));
     });
     thead.append(trHead);
@@ -933,6 +971,13 @@ export async function renderBackupHistoryPage(
         navigate(`/applications/${encodeURIComponent(item.applicationId)}`);
       });
       tdApp.append(appLink);
+
+      // Destination
+      const tdDest = el(document, "td");
+      tdDest.setAttribute("data-label", "Destination");
+      const isNas = item.artifact?.destinationId?.toLowerCase().includes("synology");
+      const destTag = el(document, "span", isNas ? "tag tag-accent" : "tag tag-neutral", isNas ? "Synology NAS" : "Local Storage");
+      tdDest.append(destTag);
 
       // Trigger
       const tdTrigger = el(document, "td");
@@ -980,7 +1025,7 @@ export async function renderBackupHistoryPage(
       });
       tdAction.append(detailLink);
 
-      row.append(tdApp, tdTrigger, tdStatus, tdVer, tdCreated, tdCompleted, tdSize, tdRet, tdAction);
+      row.append(tdApp, tdDest, tdTrigger, tdStatus, tdVer, tdCreated, tdCompleted, tdSize, tdRet, tdAction);
       tbody.append(row);
     }
 
@@ -1093,6 +1138,8 @@ export async function renderBackupDetailPage(
   // Section 1: Overview & Lifecycle
   const overviewList = el(document, "dl", "definition-grid");
   addDlItem(document, overviewList, "Application", detail.application.displayName || detail.application.name);
+  addDlItem(document, overviewList, "Storage Destination", detail.destination?.name || "Local Filesystem");
+  addDlItem(document, overviewList, "Destination Type", detail.destination?.type === "SYNOLOGY_NAS" ? "Synology NAS" : "Local Filesystem");
   addDlItem(document, overviewList, "Trigger Type", detail.job.triggerType);
   addDlItem(document, overviewList, "Created At", formatUtcDateTime(detail.job.createdAt));
   addDlItem(document, overviewList, "Started At", formatUtcDateTime(detail.job.startedAt));
@@ -1132,6 +1179,7 @@ export async function renderBackupDetailPage(
   } else {
     const art = detail.artifact;
     const artGrid = el(document, "dl", "definition-grid");
+    addDlItem(document, artGrid, "Storage Target", `${detail.destination?.name || "Local Filesystem"} (${detail.destination?.type === "SYNOLOGY_NAS" ? "Synology NAS" : "Local Filesystem"})`);
     addDlItem(document, artGrid, "Bundle Filename", art.bundleFileName);
     addDlItem(document, artGrid, "Compressed Size", formatBytes(art.bundleSizeBytes));
     addDlItem(document, artGrid, "Uncompressed Size", formatBytes(art.uncompressedBytes));
