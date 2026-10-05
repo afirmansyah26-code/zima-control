@@ -16,6 +16,7 @@ import {
   type BackupJobStatus,
   type DatabaseEngineType,
   BackupDomainError,
+  BackupDestinationInvalidError,
 } from "./contracts.js";
 import { transitionBackupJobStatus } from "./state-machine.js";
 import {
@@ -119,6 +120,10 @@ export async function executeBackupJob(
 
   if (!destination) {
     throw new BackupDomainError("Backup job has no configured destination", "NO_DESTINATION_CONFIGURED");
+  }
+
+  if (destination.isActive === false) {
+    throw new BackupDestinationInvalidError(`Backup destination '${destination.name}' is inactive`);
   }
 
   // Resolve provider from registry based on destination.type (H1)

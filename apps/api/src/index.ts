@@ -97,6 +97,8 @@ export type {
   CreateUserInput,
 } from "./auth/repository.js";
 export { bootstrapFirstAdmin, runBootstrapProcess } from "./bootstrap.js";
+export { installBackupDestinationRoutes } from "./backup-destination-http.js";
+export type { BackupDestinationRouteOptions } from "./backup-destination-http.js";
 export type {
   ApiRuntimeFactory,
   ApiServerHandle,

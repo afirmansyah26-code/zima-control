@@ -17,7 +17,11 @@ import {
   type VerificationStatus,
   BackupDomainError,
   BackupDestinationInvalidError,
+  BackupDestinationNotFoundError,
+  BackupDestinationConflictError,
+  BackupDestinationUnavailableError,
 } from "./contracts.js";
+import { BackupDestinationService } from "./destination-service.js";
 import { validatePersistentFilesHostPath } from "./source.js";
 import { validateCronExpression } from "./cron-validator.js";
 import { checkScheduleDue, getNextCronOccurrence, getPreviousCronOccurrence } from "./cron-evaluator.js";
@@ -69,7 +73,12 @@ export class BackupSourceInvalidError extends BackupDomainError {
   }
 }
 
-export { BackupDestinationInvalidError };
+export {
+  BackupDestinationInvalidError,
+  BackupDestinationNotFoundError,
+  BackupDestinationConflictError,
+  BackupDestinationUnavailableError,
+};
 
 export class BackupConfigInvalidError extends BackupDomainError {
   constructor(message: string) {
@@ -134,6 +143,7 @@ export interface BackupConfigResponse {
   config: {
     id: string;
     applicationId: string;
+    destinationId: string;
     status: string;
     retentionVersions: number;
     scheduleCron: string | null;
@@ -200,6 +210,7 @@ export interface BackupHistoryItem {
   createdAt: Date;
   artifact: {
     id: string;
+    destinationId: string;
     bundleFileName: string;
     bundleSizeBytes: string;
     uncompressedBytes: string;
@@ -262,6 +273,7 @@ export interface BackupHistoryDetailResult {
   }>;
   artifact: {
     id: string;
+    destinationId: string;
     bundleFileName: string;
     bundleSizeBytes: string;
     uncompressedBytes: string;
@@ -290,6 +302,7 @@ export interface BackupHistoryDetailResult {
 export class BackupOrchestratorService {
   private readonly retentionService: BackupRetentionService;
   private readonly destinationRegistry: BackupDestinationProviderRegistry;
+  public readonly destinationService: BackupDestinationService;
 
   constructor(
     private readonly prisma: PrismaClient,
@@ -307,6 +320,11 @@ export class BackupOrchestratorService {
     } else {
       this.destinationRegistry = createDefaultDestinationProviderRegistry();
     }
+
+    this.destinationService = new BackupDestinationService(
+      this.prisma,
+      this.destinationRegistry,
+    );
 
     this.retentionService = new BackupRetentionService(
       this.prisma,
@@ -366,6 +384,7 @@ export class BackupOrchestratorService {
         ? {
             id: config.id,
             applicationId: config.applicationId,
+            destinationId: config.destinationId,
             status: config.status,
             retentionVersions: config.retentionVersions,
             scheduleCron: config.scheduleCron,
@@ -665,6 +684,7 @@ export class BackupOrchestratorService {
     return {
       id: updatedConfig.id,
       applicationId: updatedConfig.applicationId,
+      destinationId: updatedConfig.destinationId,
       status: updatedConfig.status,
       retentionVersions: updatedConfig.retentionVersions,
       scheduleCron: updatedConfig.scheduleCron,
@@ -823,6 +843,7 @@ export class BackupOrchestratorService {
       artifact: j.artifact
         ? {
             id: j.artifact.id,
+            destinationId: j.artifact.destinationId,
             bundleFileName: j.artifact.bundleFileName,
             bundleSizeBytes: j.artifact.bundleSizeBytes.toString(),
             uncompressedBytes: j.artifact.uncompressedBytes.toString(),
@@ -923,6 +944,7 @@ export class BackupOrchestratorService {
       artifact: job.artifact
         ? {
             id: job.artifact.id,
+            destinationId: job.artifact.destinationId,
             bundleFileName: job.artifact.bundleFileName,
             bundleSizeBytes: job.artifact.bundleSizeBytes.toString(),
             uncompressedBytes: job.artifact.uncompressedBytes.toString(),

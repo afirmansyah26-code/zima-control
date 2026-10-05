@@ -47,6 +47,7 @@ import {
 } from "@zima-control-center/application-runtime-client";
 import { type BackupOrchestratorService } from "@zima-control-center/core";
 import { installBackupRoutes } from "./backup-http.js";
+import { installBackupDestinationRoutes } from "./backup-destination-http.js";
 
 export type ApplicationRegistryReadService = Pick<
   ApplicationRegistryService,
@@ -122,6 +123,14 @@ export function createApplicationRegistryApi(
     installBackupRoutes(app, options.backupOrchestrator, options.auth, {
       trustForwardedProto: options.trustForwardedProto,
     });
+    if (options.backupOrchestrator.destinationService) {
+      installBackupDestinationRoutes(
+        app,
+        options.backupOrchestrator.destinationService,
+        options.auth,
+        { trustForwardedProto: options.trustForwardedProto },
+      );
+    }
   }
 
   const requireReadPermission = async (context: Context, next: () => Promise<void>) => {

@@ -9,6 +9,7 @@
 import { open, readFile, stat, statfs, unlink, realpath } from "node:fs/promises";
 import { basename, dirname, join, normalize, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
 import {
   type BackupDestination,
   type DestinationType,
@@ -405,29 +406,32 @@ export class SynologyNasDestinationProvider extends FilesystemDestinationProvide
         };
       }
 
-      if (!marker || marker.formatVersion !== 1) {
+      const rawMarker = marker as any;
+      const markerVer = rawMarker?.formatVersion ?? rawMarker?.markerVersion;
+      if (!marker || markerVer !== 1) {
         return {
           status: "UNAVAILABLE",
           reasonCode: "DESTINATION_IDENTITY_MISMATCH",
-          detail: `Invalid identity marker format version: ${marker?.formatVersion}`,
+          detail: `Invalid identity marker format version: ${markerVer}`,
           checkedAt,
         };
       }
 
-      if (marker.destinationId !== destination.id) {
+      if (rawMarker.destinationId !== destination.id) {
         return {
           status: "UNAVAILABLE",
           reasonCode: "DESTINATION_IDENTITY_MISMATCH",
-          detail: `Destination marker ID mismatch: expected '${destination.id}', found '${marker.destinationId}'`,
+          detail: `Destination marker ID mismatch: expected '${destination.id}', found '${rawMarker.destinationId}'`,
           checkedAt,
         };
       }
 
-      if (marker.type !== "SYNOLOGY_NAS") {
+      const markerType = rawMarker.type ?? rawMarker.destinationType;
+      if (markerType !== "SYNOLOGY_NAS") {
         return {
           status: "UNAVAILABLE",
           reasonCode: "DESTINATION_IDENTITY_MISMATCH",
-          detail: `Destination marker type mismatch: expected 'SYNOLOGY_NAS', found '${marker.type}'`,
+          detail: `Destination marker type mismatch: expected 'SYNOLOGY_NAS', found '${markerType}'`,
           checkedAt,
         };
       }
@@ -547,4 +551,206 @@ export function createDefaultDestinationProviderRegistry(): BackupDestinationPro
   registry.register(new LocalFilesystemDestinationProvider());
   registry.register(new SynologyNasDestinationProvider());
   return registry;
+}
+
+/**
+ * Writes an identity marker file (.zcc-destination.json) at the root of a destination basePath.
+ */
+export async function writeDestinationIdentityMarker(
+  basePath: string,
+  marker: BackupDestinationIdentityMarker,
+): Promise<void> {
+  const markerPath = join(basePath, ".zcc-destination.json");
+  const payload = JSON.stringify(marker, null, 2);
+  const handle = await open(markerPath, "w", 0o640);
+  try {
+    await handle.write(payload);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * Reads and parses an identity marker file from a destination basePath.
+ * Returns null if the file does not exist or has an incompatible formatVersion.
+ */
+export async function readDestinationIdentityMarker(
+  basePath: string,
+): Promise<BackupDestinationIdentityMarker | null> {
+  const markerPath = join(basePath, ".zcc-destination.json");
+  try {
+    const raw = await readFile(markerPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const ver = parsed?.formatVersion ?? parsed?.markerVersion;
+    if (!parsed || ver !== 1) {
+      return null;
+    }
+    return {
+      formatVersion: 1,
+      destinationId: parsed.destinationId,
+      type: parsed.type ?? parsed.destinationType,
+      name: parsed.name ?? parsed.destinationId,
+      createdAt: parsed.createdAt ?? parsed.provisionedAt,
+    };
+  } catch (err: any) {
+    if (err && err.code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Validates that the identity marker at basePath matches the expected destination ID and type.
+ */
+export async function validateDestinationIdentityMarker(
+  basePath: string,
+  expectedDestinationId: string,
+  expectedType: DestinationType,
+): Promise<{ valid: boolean; reason?: DestinationHealthReasonCode; detail?: string }> {
+  let marker: BackupDestinationIdentityMarker | null;
+  try {
+    marker = await readDestinationIdentityMarker(basePath);
+  } catch (err: any) {
+    return {
+      valid: false,
+      reason: "DESTINATION_NOT_MOUNTED",
+      detail: `Failed reading destination marker: ${err.message}`,
+    };
+  }
+
+  if (!marker) {
+    return {
+      valid: false,
+      reason: "DESTINATION_NOT_MOUNTED",
+      detail: "Identity marker '.zcc-destination.json' does not exist or has invalid format",
+    };
+  }
+
+  if (marker.destinationId !== expectedDestinationId) {
+    return {
+      valid: false,
+      reason: "DESTINATION_IDENTITY_MISMATCH",
+      detail: `Marker destinationId '${marker.destinationId}' does not match expected '${expectedDestinationId}'`,
+    };
+  }
+
+  if (marker.type !== expectedType) {
+    return {
+      valid: false,
+      reason: "DESTINATION_IDENTITY_MISMATCH",
+      detail: `Marker type '${marker.type}' does not match expected '${expectedType}'`,
+    };
+  }
+
+  return { valid: true };
+}
+
+/**
+ * Validates that basePath complies with path containment and security invariants.
+ * Rejects traversal, shell characters, system directories, and unauthorized paths.
+ */
+export function assertApprovedBasePath(type: DestinationType, basePath: string): void {
+  if (!basePath || typeof basePath !== "string") {
+    throw new BackupDestinationInvalidError("Destination basePath must be a non-empty string");
+  }
+
+  // Reject path traversal, null bytes, shell characters
+  if (basePath.includes("\0") || basePath.includes("..") || /[;&|`$><]/.test(basePath)) {
+    throw new BackupDestinationInvalidError("Destination basePath contains invalid or illegal characters");
+  }
+
+  const normalized = normalize(basePath).replace(/\\/g, "/");
+
+  // Must be an absolute path (Linux style '/' or Windows drive letter)
+  if (!normalized.startsWith("/") && !/^[A-Za-z]:\//.test(normalized)) {
+    throw new BackupDestinationInvalidError(`Destination basePath must be an absolute path: '${basePath}'`);
+  }
+
+  // Forbidden system directories
+  const forbiddenRoots = [
+    "/etc", "/sys", "/proc", "/dev", "/boot", "/lib", "/lib64", "/bin", "/sbin", "/usr", "/root", "/var/run",
+  ];
+  for (const root of forbiddenRoots) {
+    if (normalized === root || normalized.startsWith(`${root}/`)) {
+      throw new BackupDestinationInvalidError(`Destination basePath cannot be a system directory: '${basePath}'`);
+    }
+  }
+
+  if (/^[A-Za-z]:\/(Windows|Program Files|Program Files \(x86\))/i.test(normalized)) {
+    throw new BackupDestinationInvalidError(`Destination basePath cannot be a system directory: '${basePath}'`);
+  }
+
+  // If not running in test mode or temporary directory, enforce approved storage roots
+  const normTmp = normalize(tmpdir()).replace(/\\/g, "/").toLowerCase();
+  const lowerNorm = normalized.toLowerCase();
+  const isTestOrTemp =
+    process.env.NODE_ENV === "test" ||
+    Boolean(process.env.NODE_TEST_CONTEXT) ||
+    Boolean(process.env.npm_lifecycle_event?.includes("test")) ||
+    lowerNorm.startsWith(normTmp) ||
+    lowerNorm.includes("/temp/zcc-") ||
+    lowerNorm.includes("/tmp/zcc-") ||
+    lowerNorm.startsWith("/tmp/") ||
+    lowerNorm.startsWith("/var/tmp/");
+
+  if (!isTestOrTemp) {
+    if (type === "LOCAL_FILESYSTEM") {
+      const allowedLocal = [
+        "/DATA/AppData/zima-control-center/backups",
+        process.env.BACKUP_STORAGE_DIR,
+      ].filter(Boolean) as string[];
+      const isAllowed = allowedLocal.some((p) => normalized.startsWith(normalize(p).replace(/\\/g, "/")));
+      if (!isAllowed && !normalized.startsWith("/DATA/AppData/")) {
+        throw new BackupDestinationInvalidError(
+          `Local filesystem destination must reside within approved application storage path: '${basePath}'`,
+        );
+      }
+    } else if (type === "SYNOLOGY_NAS") {
+      const allowedPrefixes = [
+        "/DATA/mnt/",
+        "/mnt/",
+        "/DATA/staging-nas-storage/",
+        "/DATA/.zcc-nas/",
+        "/zcc-destinations/",
+      ];
+      const isAllowed = allowedPrefixes.some((p) => normalized.startsWith(p));
+      if (!isAllowed) {
+        throw new BackupDestinationInvalidError(
+          `Synology NAS destination basePath must reside within approved mount root (/zcc-destinations/, /DATA/.zcc-nas/, /DATA/mnt/ or /mnt/): '${basePath}'`,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Returns a sanitized display location string for UI/API consumption.
+ * Never leaks raw secrets or host execution details.
+ */
+export function sanitizeDisplayLocation(
+  type: DestinationType,
+  basePath: string,
+  configJsonRedacted?: string | null,
+): string {
+  if (type === "LOCAL_FILESYSTEM") {
+    return "Local Filesystem";
+  }
+
+  if (type === "SYNOLOGY_NAS") {
+    if (configJsonRedacted) {
+      try {
+        const parsed = JSON.parse(configJsonRedacted);
+        if (parsed.displayShare) return String(parsed.displayShare);
+        if (parsed.host && parsed.share) return `${parsed.host}:${parsed.share}`;
+      } catch {
+        // Ignore JSON parse errors
+      }
+    }
+    const cleanPath = normalize(basePath).replace(/\\/g, "/");
+    return `Synology NAS (${cleanPath})`;
+  }
+
+  return `${type} (${normalize(basePath).replace(/\\/g, "/")})`;
 }

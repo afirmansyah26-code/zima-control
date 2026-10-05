@@ -54,8 +54,8 @@ export interface BackupDestination {
   readonly basePath: string;
   readonly isActive: boolean;
   readonly configJsonRedacted?: string | null;
-  readonly createdAt: Date;
-  readonly updatedAt: Date;
+  readonly createdAt?: Date;
+  readonly updatedAt?: Date;
 }
 
 export interface BackupConfig {
@@ -195,5 +195,26 @@ export class BackupDestinationInvalidError extends BackupDomainError {
   constructor(message: string) {
     super(message, "BACKUP_DESTINATION_INVALID");
     this.name = "BackupDestinationInvalidError";
+  }
+}
+
+export class BackupDestinationNotFoundError extends BackupDomainError {
+  constructor(identifier: string) {
+    super(`Backup destination '${identifier}' not found`, "BACKUP_DESTINATION_NOT_FOUND");
+    this.name = "BackupDestinationNotFoundError";
+  }
+}
+
+export class BackupDestinationConflictError extends BackupDomainError {
+  constructor(message: string) {
+    super(message, "BACKUP_DESTINATION_CONFLICT");
+    this.name = "BackupDestinationConflictError";
+  }
+}
+
+export class BackupDestinationUnavailableError extends BackupDomainError {
+  constructor(message: string, code = "BACKUP_DESTINATION_UNAVAILABLE") {
+    super(message, code);
+    this.name = "BackupDestinationUnavailableError";
   }
 }

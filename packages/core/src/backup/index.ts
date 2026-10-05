@@ -22,4 +22,5 @@ export * from "./database-source.js";
 export * from "./cron-validator.js";
 export * from "./cron-evaluator.js";
 export * from "./retention-service.js";
+export * from "./destination-service.js";
 export * from "./orchestrator.js";

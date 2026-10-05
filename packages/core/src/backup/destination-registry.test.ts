@@ -799,6 +799,7 @@ test("H5: Config update preserves existing destinationId when destinationId is o
   });
 
   // Verify: destination remained destA.id, NOT defaulted to destB or newly generated!
+  assert.ok(updated);
   assert.equal(updated.destination.id, destA.id);
   assert.equal(updated.retentionVersions, 7);
 });
