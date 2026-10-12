@@ -14,6 +14,7 @@ services:
       APPLICATION_RUNTIME_SOCKET_PATH: /run/zcc/application-runtime.sock
       TRUST_FORWARDED_PROTO: "true"
       AUTH_COOKIE_SECURE: ${AUTH_COOKIE_SECURE:-false}
+      WORKER_INTERNAL_URL: ${WORKER_INTERNAL_URL:-http://worker:3001}
     volumes:
       - registry-data:/data
       - ${RUNTIME_SOCKET_PATH:-/run/zcc/application-runtime.sock}:/run/zcc/application-runtime.sock
@@ -58,11 +59,13 @@ services:
       ZIMAOS_BASE_URL: ${ZIMAOS_BASE_URL:?ZIMAOS_BASE_URL is required}
       OBSERVATION_INTERVAL_MS: ${OBSERVATION_INTERVAL_MS:-30000}
       APPLICATION_RUNTIME_SOCKET_PATH: /run/zcc/application-runtime.sock
+      WORKER_INTERNAL_PORT: ${WORKER_INTERNAL_PORT:-3001}
       NODE_ENV: production
     volumes:
       - registry-data:/data
       - ${RUNTIME_SOCKET_PATH:-/run/zcc/application-runtime.sock}:/run/zcc/application-runtime.sock
       - ${DATA_APPDATA_PATH:-/DATA/AppData}:/DATA/AppData
+      - /DATA/.zcc-nas:/zcc-destinations:rslave,rw
     depends_on:
       api:
         condition: service_healthy

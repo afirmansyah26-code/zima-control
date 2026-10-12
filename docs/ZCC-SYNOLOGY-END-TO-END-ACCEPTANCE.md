@@ -28,7 +28,7 @@ Phase 8.3.1 resolves the explicit validation gaps identified following Phase 8.3
 | :--- | :---: | :--- |
 | **Active-Operation Outage (Test A)** | **PASS** | Disruption injected at +24s into `CAPTURING`. Job terminated in `FAILED` with `failureReasonCode: PAYLOAD_STRUCTURE_CORRUPT`. Zero unverified artifacts promoted, zero partial bundles on NAS, zero silent local filesystem fallback, staging temp directory cleaned. Post-reconnect backup succeeded with zero worker restart. |
 | **Automatic Mount Recovery (Test B)** | **PASS WITH CONSTRAINTS** | Empirically verified across controlled host reboot with **zero manual remount commands**. Persistent systemd `.mount` and `.automount` units in `/etc/systemd/system/` automatically recovered NFS mount via autofs. Marker identity, worker `rslave` propagation, preflight `HEALTHY`, and post-reboot backup (`1acf68ad`) succeeded. Constraints documented for containerized vs external physical NAS. |
-| **Full Quality Gates (Test C)** | **PASS** | `npm run test:backup`: 81/81 PASS (0 fail, 99.2s). `npm run typecheck`: 0 errors across all 21 packages/apps. `npm run build`: 0 errors across all packages/apps. `git diff --check`: 0 whitespace errors. Residual Windows host filesystem limitation in non-backup package `@zima-control-center/trust-provisioning` documented. |
+| **Full Quality Gates (Test C)** | **PASS** | `npm run test:backup`: 85/85 PASS (0 fail, 104.8s). `npm run typecheck`: 0 errors across all 21 packages/apps. `npm run build`: 0 errors across all packages/apps. `git diff --check`: 0 whitespace errors. Residual Windows host filesystem limitation in non-backup package `@zima-control-center/trust-provisioning` documented. |
 | **Security and Cleanup (Test D)** | **PASS** | Worker `privileged: false`, `CapAdd: []`, zero `docker.sock`. Zero credentials in SQLite `BackupDestination` table, worker logs, or UI. Transient outage fixture removed; staging NAS staging clean. Baseline staging health restored. |
 | **Production Isolation (Test D)** | **PASS** | Production IP `10.10.0.28` strictly uncontacted: zero shell history matches, zero sockets, zero route table entries, zero mount entries. |
 
@@ -184,7 +184,7 @@ The 20-stage automated end-to-end acceptance harness (`scratch/test-phase83-e2e.
 
 | Command | Exit Code | Result Summary | Coverage & Details |
 | :--- | :---: | :---: | :--- |
-| `npm run test:backup` | **0** | **PASS** (81 tests, 0 failed, 99.2s) | All backup domain tests, MariaDB dumps, exclusions, tar.zst archiving, 4-tier verification, retention H1/H2/H3/H4/H5, concurrency locks, and scheduler integration. |
+| `npm run test:backup` | **0** | **PASS** (85 tests, 0 failed, 104.8s) | All backup domain tests, MariaDB dumps, exclusions, tar.zst archiving, 4-tier verification, retention H1/H2/H3/H4/H5, concurrency locks, scheduler integration, and delegated destination preflight. |
 | `npm run typecheck` | **0** | **PASS** (0 errors) | Full compilation check across all 21 workspaces (all apps and packages). |
 | `npm run build` | **0** | **PASS** (Clean build) | Full production build of all packages, daemons, worker, api, and web (Vite production bundle). |
 | `git diff --check` | **0** | **PASS** (Clean diff) | Clean repository diff with zero whitespace or line-break conflicts. |

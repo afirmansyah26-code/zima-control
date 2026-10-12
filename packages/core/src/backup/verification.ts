@@ -41,7 +41,49 @@ export const VERIFICATION_FAILURE_CODES = {
   SIZE_SANITY_FAILED: "SIZE_SANITY_FAILED",
   CHECKSUM_MISMATCH: "CHECKSUM_MISMATCH",
   PAYLOAD_STRUCTURE_CORRUPT: "PAYLOAD_STRUCTURE_CORRUPT",
+  DESTINATION_IO_ERROR: "DESTINATION_IO_ERROR",
+  STREAM_TRUNCATED: "STREAM_TRUNCATED",
 } as const;
+
+const IO_ERROR_CODES = new Set([
+  "EIO",
+  "ENOTCONN",
+  "ESTALE",
+  "ETIMEDOUT",
+  "ECONNRESET",
+  "ECONNABORTED",
+  "EPIPE",
+  "ENODEV",
+  "EBADF",
+  "ENETDOWN",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "EHOSTDOWN",
+  "EROFS",
+]);
+
+/**
+ * Determines whether an error is caused by filesystem or network I/O disruption
+ * rather than application-level data corruption.
+ */
+export function isFilesystemIoError(error: unknown): boolean {
+  if (!error) return false;
+  const err = error as Record<string, unknown>;
+  const code = String(err.code ?? "");
+  if (IO_ERROR_CODES.has(code)) return true;
+  const msg = String(err.message ?? "").toLowerCase();
+  return (
+    msg.includes("input/output error") ||
+    msg.includes("stale file handle") ||
+    msg.includes("transport endpoint is not connected") ||
+    msg.includes("broken pipe") ||
+    msg.includes("connection reset") ||
+    msg.includes("network is down") ||
+    msg.includes("host is down") ||
+    msg.includes("destination i/o") ||
+    msg.includes("stream truncated")
+  );
+}
 
 /**
  * Evaluates the overall verification outcome from individual check results.

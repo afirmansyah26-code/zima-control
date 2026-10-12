@@ -29,7 +29,8 @@ export type DestinationHealthReasonCode =
   | "DESTINATION_STALE"
   | "DESTINATION_TIMEOUT"
   | "DESTINATION_PATH_TRAVERSAL"
-  | "DESTINATION_UNAVAILABLE";
+  | "DESTINATION_UNAVAILABLE"
+  | "WORKER_UNAVAILABLE";
 
 export interface DestinationHealth {
   readonly status: "AVAILABLE" | "UNAVAILABLE";
@@ -753,4 +754,125 @@ export function sanitizeDisplayLocation(
   }
 
   return `${type} (${normalize(basePath).replace(/\\/g, "/")})`;
+}
+
+export interface DelegatedDestinationProviderOptions {
+  readonly workerInternalUrl: string;
+  readonly timeoutMs?: number;
+  readonly destinationType?: DestinationType;
+  readonly localProvider?: BackupDestinationProvider;
+  readonly fetchImpl?: typeof fetch;
+}
+
+/**
+ * Delegated destination provider.
+ * Delegates destination preflight and health checks to the worker process
+ * over a narrow, typed internal HTTP communication channel.
+ * Allows the API container to run without any host NAS filesystem mounts.
+ */
+export class DelegatedDestinationProvider implements BackupDestinationProvider {
+  public readonly destinationType: DestinationType;
+  private readonly workerInternalUrl: string;
+  private readonly timeoutMs: number;
+  private readonly localProvider?: BackupDestinationProvider;
+  private readonly fetchImpl: typeof fetch;
+
+  public constructor(options: DelegatedDestinationProviderOptions) {
+    this.destinationType = options.destinationType ?? "SYNOLOGY_NAS";
+    this.workerInternalUrl = options.workerInternalUrl.replace(/\/$/, "");
+    this.timeoutMs = options.timeoutMs ?? 10000;
+    this.localProvider = options.localProvider;
+    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  }
+
+  public resolveStagingDirectory(destination: BackupDestination, jobId: string): string {
+    if (this.localProvider) {
+      return this.localProvider.resolveStagingDirectory(destination, jobId);
+    }
+    return join(destination.basePath, "staging", `.tmp-${jobId}`);
+  }
+
+  public resolveStorageDirectory(destination: BackupDestination, applicationName: string): string {
+    if (this.localProvider) {
+      return this.localProvider.resolveStorageDirectory(destination, applicationName);
+    }
+    return join(destination.basePath, "storage", applicationName);
+  }
+
+  public resolveArtifactPath(
+    destination: BackupDestination,
+    applicationName: string,
+    bundleFileName: string,
+  ): string {
+    if (this.localProvider) {
+      return this.localProvider.resolveArtifactPath(destination, applicationName, bundleFileName);
+    }
+    return join(destination.basePath, "storage", applicationName, bundleFileName);
+  }
+
+  public isPathContained(targetPath: string, rootDir: string): boolean {
+    if (this.localProvider) {
+      return this.localProvider.isPathContained(targetPath, rootDir);
+    }
+    const resolvedTarget = resolve(targetPath);
+    const resolvedRoot = resolve(rootDir);
+    return resolvedTarget.startsWith(resolvedRoot);
+  }
+
+  public async preflight(
+    destination: BackupDestination,
+    opts: PreflightOptions = {},
+  ): Promise<DestinationHealth> {
+    const checkedAt = new Date();
+    const timeoutMs = opts.timeoutMs ?? this.timeoutMs;
+    const correlationId = randomUUID();
+
+    try {
+      const response = await this.fetchImpl(
+        `${this.workerInternalUrl}/internal/destinations/preflight`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Correlation-Id": correlationId,
+          },
+          body: JSON.stringify({
+            destinationId: destination.id,
+            name: destination.name,
+            type: destination.type,
+            basePath: destination.basePath,
+            timeoutMs,
+            requiredBytes: opts.requiredBytes ? opts.requiredBytes.toString() : undefined,
+          }),
+          signal: AbortSignal.timeout(timeoutMs),
+        },
+      );
+
+      if (!response.ok) {
+        return {
+          status: "UNAVAILABLE",
+          reasonCode: "WORKER_UNAVAILABLE",
+          detail: `Worker destination preflight returned HTTP ${response.status}`,
+          checkedAt,
+        };
+      }
+
+      const body = (await response.json()) as any;
+      return {
+        status: body.status === "AVAILABLE" ? "AVAILABLE" : "UNAVAILABLE",
+        reasonCode: body.reasonCode,
+        detail: body.detail,
+        totalBytes: body.totalBytes !== undefined ? BigInt(body.totalBytes) : undefined,
+        freeBytes: body.freeBytes !== undefined ? BigInt(body.freeBytes) : undefined,
+        checkedAt: body.checkedAt ? new Date(body.checkedAt) : checkedAt,
+      };
+    } catch (err: any) {
+      return {
+        status: "UNAVAILABLE",
+        reasonCode: "WORKER_UNAVAILABLE",
+        detail: `Worker destination preflight unreachable: ${err.message ?? String(err)}`,
+        checkedAt,
+      };
+    }
+  }
 }

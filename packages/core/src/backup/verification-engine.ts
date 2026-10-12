@@ -14,6 +14,7 @@ import {
   type BackupVerificationSummary,
   VERIFICATION_FAILURE_CODES,
   evaluateVerificationOutcome,
+  isFilesystemIoError,
 } from "./verification.js";
 import { verifyArchiveStructure } from "./archive.js";
 import { parseBackupManifestJson } from "./manifest.js";
@@ -135,11 +136,14 @@ export async function executeFourTierVerification(
       durationMs: Date.now() - t2Start,
     });
   } catch (err) {
+    const isIo = isFilesystemIoError(err);
     checks.push({
       checkName: "SIZE_SANITY",
       tier: 2,
       passed: false,
-      failureReasonCode: VERIFICATION_FAILURE_CODES.SIZE_SANITY_FAILED,
+      failureReasonCode: isIo
+        ? VERIFICATION_FAILURE_CODES.DESTINATION_IO_ERROR
+        : VERIFICATION_FAILURE_CODES.SIZE_SANITY_FAILED,
       detail: `Size sanity check failed: ${err instanceof Error ? err.message : String(err)}`,
       durationMs: Date.now() - t2Start,
     });
@@ -211,11 +215,14 @@ export async function executeFourTierVerification(
       durationMs: Date.now() - t3Start,
     });
   } catch (err) {
+    const isIo = isFilesystemIoError(err);
     checks.push({
       checkName: "SHA256_DIGEST",
       tier: 3,
       passed: false,
-      failureReasonCode: VERIFICATION_FAILURE_CODES.CHECKSUM_MISMATCH,
+      failureReasonCode: isIo
+        ? VERIFICATION_FAILURE_CODES.DESTINATION_IO_ERROR
+        : VERIFICATION_FAILURE_CODES.CHECKSUM_MISMATCH,
       detail: `SHA-256 computation failed: ${err instanceof Error ? err.message : String(err)}`,
       durationMs: Date.now() - t3Start,
     });

@@ -5,6 +5,9 @@ import {
   PrismaRegistryRepository,
   validateProductionSqliteDatabaseUrl,
   BackupOrchestratorService,
+  DefaultBackupDestinationProviderRegistry,
+  LocalFilesystemDestinationProvider,
+  DelegatedDestinationProvider,
   type RegistryReadRepository,
 } from "@zima-control-center/core";
 import { ApplicationRuntimeGateway } from "@zima-control-center/application-runtime-client";
@@ -34,6 +37,7 @@ export interface ApiRuntimeConfig {
   trustForwardedProto: boolean;
   mutationCapabilityMode: ProductionCapabilityMode;
   runtimeSocketPath?: string;
+  workerInternalUrl?: string;
 }
 
 export const productionCapabilityModes = [
@@ -151,6 +155,11 @@ export function readApiRuntimeConfig(environment: EnvironmentSource): ApiRuntime
     ? rawSocketPath
     : "/run/zcc/application-runtime.sock";
 
+  const rawWorkerInternalUrl = environment.WORKER_INTERNAL_URL?.trim();
+  const workerInternalUrl = rawWorkerInternalUrl && rawWorkerInternalUrl.length > 0
+    ? rawWorkerInternalUrl
+    : undefined;
+
   return {
     host,
     port,
@@ -159,6 +168,7 @@ export function readApiRuntimeConfig(environment: EnvironmentSource): ApiRuntime
     trustForwardedProto,
     mutationCapabilityMode,
     runtimeSocketPath,
+    ...(workerInternalUrl ? { workerInternalUrl } : {}),
   };
 }
 
@@ -261,7 +271,18 @@ export function composeApiRuntimeWithPrisma(
     new PrismaAuthRepository(prisma),
     { secureCookies: config.authCookieSecure },
   );
-  const backupOrchestrator = new BackupOrchestratorService(prisma);
+  let destinationRegistry: DefaultBackupDestinationProviderRegistry | undefined;
+  if (config.workerInternalUrl) {
+    const registry = new DefaultBackupDestinationProviderRegistry();
+    registry.register(new LocalFilesystemDestinationProvider());
+    registry.register(
+      new DelegatedDestinationProvider({
+        workerInternalUrl: config.workerInternalUrl,
+      }),
+    );
+    destinationRegistry = registry;
+  }
+  const backupOrchestrator = new BackupOrchestratorService(prisma, destinationRegistry);
 
   const isRuntimeAdapter = config.mutationCapabilityMode === "RUNTIME_ADAPTER";
   const runtimeGateway = isRuntimeAdapter

@@ -29,6 +29,7 @@ import { scanPersistentFilesDirectory } from "./persistent-files-source.js";
 import { DatabaseSourceProvider } from "./database-source.js";
 import { createTarZstdBundle, type ArchiveFileEntry } from "./archive.js";
 import { executeFourTierVerification } from "./verification-engine.js";
+import { isFilesystemIoError } from "./verification.js";
 import {
   type BackupManifestV1,
   type BackupManifestSourceEntry,
@@ -395,16 +396,53 @@ export async function executeBackupJob(
     }
 
     // Pack all collected entries into the unified staging .tar.zst bundle
-    await createTarZstdBundle({
-      entries: archiveEntries,
-      targetBundlePath: stagingBundlePath,
-    });
+    try {
+      await createTarZstdBundle({
+        entries: archiveEntries,
+        targetBundlePath: stagingBundlePath,
+      });
+    } catch (err: any) {
+      if (err.code === "DESTINATION_IO_ERROR" || isFilesystemIoError(err)) {
+        throw new BackupDomainError(
+          `Destination I/O failure while writing archive bundle: ${err.message}`,
+          "DESTINATION_IO_ERROR",
+        );
+      }
+      if (err.code === "STREAM_TRUNCATED") {
+        throw new BackupDomainError(
+          `Archive bundle stream interrupted: ${err.message}`,
+          "STREAM_TRUNCATED",
+        );
+      }
+      throw err;
+    }
 
     // Calculate SHA-256 of the generated bundle
-    const bundleBuffer = await readFile(stagingBundlePath);
+    let bundleBuffer: Buffer;
+    try {
+      bundleBuffer = await readFile(stagingBundlePath);
+    } catch (err: any) {
+      if (isFilesystemIoError(err)) {
+        throw new BackupDomainError(
+          `Destination I/O failure while reading generated bundle: ${err.message}`,
+          "DESTINATION_IO_ERROR",
+        );
+      }
+      throw err;
+    }
     const bundleHash = createHash("sha256").update(bundleBuffer).digest("hex");
 
-    await writeFile(stagingSha256Path, `${bundleHash}  ${bundleFileName}\n`, "utf8");
+    try {
+      await writeFile(stagingSha256Path, `${bundleHash}  ${bundleFileName}\n`, "utf8");
+    } catch (err: any) {
+      if (isFilesystemIoError(err)) {
+        throw new BackupDomainError(
+          `Destination I/O failure while writing checksum file: ${err.message}`,
+          "DESTINATION_IO_ERROR",
+        );
+      }
+      throw err;
+    }
 
     // Write initial manifest
     const manifestId = `man_${randomUUID()}`;
@@ -436,7 +474,17 @@ export async function executeBackupJob(
     };
 
     const sanitizedManifest = sanitizeBackupMetadata(manifestData);
-    await writeFile(stagingManifestPath, JSON.stringify(sanitizedManifest, null, 2), "utf8");
+    try {
+      await writeFile(stagingManifestPath, JSON.stringify(sanitizedManifest, null, 2), "utf8");
+    } catch (err: any) {
+      if (isFilesystemIoError(err)) {
+        throw new BackupDomainError(
+          `Destination I/O failure while writing initial manifest: ${err.message}`,
+          "DESTINATION_IO_ERROR",
+        );
+      }
+      throw err;
+    }
 
     // --------------------------------------------------------------------------
     // 3. VERIFYING
@@ -486,10 +534,20 @@ export async function executeBackupJob(
     const finalManifestPath = join(targetStorageDir, manifestFileName);
     const finalSha256Path = join(targetStorageDir, sha256FileName);
 
-    const allowCrossDevice = destination.type !== "SYNOLOGY_NAS";
-    await atomicMoveFile(stagingBundlePath, finalBundlePath, allowCrossDevice);
-    await atomicMoveFile(stagingManifestPath, finalManifestPath, allowCrossDevice);
-    await atomicMoveFile(stagingSha256Path, finalSha256Path, allowCrossDevice);
+    try {
+      const allowCrossDevice = destination.type !== "SYNOLOGY_NAS";
+      await atomicMoveFile(stagingBundlePath, finalBundlePath, allowCrossDevice);
+      await atomicMoveFile(stagingManifestPath, finalManifestPath, allowCrossDevice);
+      await atomicMoveFile(stagingSha256Path, finalSha256Path, allowCrossDevice);
+    } catch (err: any) {
+      if (isFilesystemIoError(err)) {
+        throw new BackupDomainError(
+          `Destination I/O failure during artifact promotion: ${err.message}`,
+          "DESTINATION_IO_ERROR",
+        );
+      }
+      throw err;
+    }
 
     // Clean up staging directory
     await rm(stagingDirectory, { recursive: true, force: true });

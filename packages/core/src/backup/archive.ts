@@ -18,6 +18,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import * as tar from "tar";
 import { init, compress, decompress } from "@bokuweb/zstd-wasm";
+import { VERIFICATION_FAILURE_CODES, isFilesystemIoError } from "./verification.js";
 
 // Standard Zstandard magic number: 0xFD2FB528 in little-endian = [0x28, 0xB5, 0x2F, 0xFD]
 export const ZSTD_MAGIC_BYTES = Buffer.from([0x28, 0xb5, 0x2f, 0xfd]);
@@ -227,6 +228,11 @@ async function createBundleWithSystemZstd(
   const writeStream = createWriteStream(targetBundlePath);
   let uncompressedBytes = 0n;
   let bundleSizeBytes = 0n;
+  let streamError: Error | null = null;
+
+  writeStream.on("error", (err) => {
+    streamError = err;
+  });
 
   // Track uncompressed byte count from tarStream
   tarStream.on("data", (chunk: Buffer) => {
@@ -234,11 +240,16 @@ async function createBundleWithSystemZstd(
   });
 
   // Pipe tarStream -> zstdProcess.stdin
-  pipeline(tarStream, zstdProcess.stdin).catch(() => {});
+  pipeline(tarStream, zstdProcess.stdin).catch((err) => {
+    if (!streamError) streamError = err;
+  });
 
   // Pipe zstdProcess.stdout -> hash & writeStream
   const outputPromise = (async () => {
     for await (const chunk of zstdProcess.stdout) {
+      if (streamError) {
+        throw streamError;
+      }
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       hash.update(buf);
       bundleSizeBytes += BigInt(buf.length);
@@ -246,8 +257,14 @@ async function createBundleWithSystemZstd(
         await new Promise<void>((r) => { writeStream.once("drain", () => r()); });
       }
     }
+    if (streamError) {
+      throw streamError;
+    }
     writeStream.end();
-    await new Promise<void>((r) => { writeStream.once("finish", () => r()); });
+    await new Promise<void>((resolve, reject) => {
+      writeStream.once("finish", () => resolve());
+      writeStream.once("error", (err) => reject(err));
+    });
   })();
 
   const exitPromise = new Promise<void>((resolve, reject) => {
@@ -258,7 +275,18 @@ async function createBundleWithSystemZstd(
     zstdProcess.once("error", reject);
   });
 
-  await Promise.all([outputPromise, exitPromise]);
+  try {
+    await Promise.all([outputPromise, exitPromise]);
+  } catch (err: any) {
+    if (isFilesystemIoError(err)) {
+      const ioErr = new Error(`Destination I/O error during archive write: ${err.message}`) as any;
+      ioErr.code = VERIFICATION_FAILURE_CODES.DESTINATION_IO_ERROR;
+      throw ioErr;
+    }
+    const truncatedErr = new Error(`Archive stream truncated during write: ${err.message}`) as any;
+    truncatedErr.code = VERIFICATION_FAILURE_CODES.STREAM_TRUNCATED;
+    throw truncatedErr;
+  }
 
   return {
     bundleSizeBytes,
@@ -284,15 +312,15 @@ export async function verifyArchiveStructure(
     if (bytesRead < 4) {
       return {
         isValid: false,
-        failureReasonCode: "PAYLOAD_STRUCTURE_CORRUPT",
-        detail: "File too small to contain Zstandard magic bytes",
+        failureReasonCode: VERIFICATION_FAILURE_CODES.STREAM_TRUNCATED,
+        detail: `File too small to contain Zstandard magic bytes (${bytesRead} bytes read; expected >= 4)`,
       };
     }
 
     if (!magicBuffer.equals(ZSTD_MAGIC_BYTES)) {
       return {
         isValid: false,
-        failureReasonCode: "PAYLOAD_STRUCTURE_CORRUPT",
+        failureReasonCode: VERIFICATION_FAILURE_CODES.PAYLOAD_STRUCTURE_CORRUPT,
         detail: `Invalid Zstandard magic bytes: got ${magicBuffer.toString("hex")}, expected 28b52ffd`,
       };
     }
@@ -302,22 +330,42 @@ export async function verifyArchiveStructure(
 
     // Verify tar header inside by decompressing the payload
     await ensureZstdWasmInitialized();
-    const compressedData = await readFile(archivePath);
+    let compressedData: Buffer;
+    try {
+      compressedData = await readFile(archivePath);
+    } catch (readErr) {
+      if (isFilesystemIoError(readErr)) {
+        return {
+          isValid: false,
+          failureReasonCode: VERIFICATION_FAILURE_CODES.DESTINATION_IO_ERROR,
+          detail: `Destination read failed during structure verification: ${readErr instanceof Error ? readErr.message : String(readErr)}`,
+        };
+      }
+      throw readErr;
+    }
+
     let decompressed: Uint8Array;
     try {
       decompressed = decompress(compressedData);
     } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const isTruncated = msg.toLowerCase().includes("unexpected end") ||
+                          msg.toLowerCase().includes("src size is too small") ||
+                          msg.toLowerCase().includes("truncated") ||
+                          msg.toLowerCase().includes("premature");
       return {
         isValid: false,
-        failureReasonCode: "PAYLOAD_STRUCTURE_CORRUPT",
-        detail: `Zstandard decompression failed: ${e instanceof Error ? e.message : String(e)}`,
+        failureReasonCode: isTruncated
+          ? VERIFICATION_FAILURE_CODES.STREAM_TRUNCATED
+          : VERIFICATION_FAILURE_CODES.PAYLOAD_STRUCTURE_CORRUPT,
+        detail: `Zstandard decompression failed: ${msg}`,
       };
     }
 
     if (decompressed.length < 512) {
       return {
         isValid: false,
-        failureReasonCode: "PAYLOAD_STRUCTURE_CORRUPT",
+        failureReasonCode: VERIFICATION_FAILURE_CODES.STREAM_TRUNCATED,
         detail: "Decompressed payload is smaller than one 512-byte tar header block",
       };
     }
@@ -329,21 +377,28 @@ export async function verifyArchiveStructure(
     if (magic !== "ustar") {
       return {
         isValid: false,
-        failureReasonCode: "PAYLOAD_STRUCTURE_CORRUPT",
+        failureReasonCode: VERIFICATION_FAILURE_CODES.PAYLOAD_STRUCTURE_CORRUPT,
         detail: `Invalid tar header: expected 'ustar' magic at offset 257, got '${magic}'`,
       };
     }
 
     return { isValid: true };
   } catch (error) {
+    if (isFilesystemIoError(error)) {
+      return {
+        isValid: false,
+        failureReasonCode: VERIFICATION_FAILURE_CODES.DESTINATION_IO_ERROR,
+        detail: `Destination I/O error during archive inspection: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
     return {
       isValid: false,
-      failureReasonCode: "PAYLOAD_STRUCTURE_CORRUPT",
+      failureReasonCode: VERIFICATION_FAILURE_CODES.PAYLOAD_STRUCTURE_CORRUPT,
       detail: `Archive inspection failed: ${error instanceof Error ? error.message : String(error)}`,
     };
   } finally {
     if (fileHandle) {
-      await fileHandle.close();
+      await fileHandle.close().catch(() => {});
     }
   }
 }

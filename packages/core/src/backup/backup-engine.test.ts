@@ -396,3 +396,32 @@ test("Real Backup Execution: full lifecycle, atomicity, manifest sidecars, and c
     await rm(fixtureSourceRoot, { recursive: true, force: true });
   }
 });
+
+test("Blocker D Diagnostic Correctness: distinguished failure reasons for genuine corruption, I/O errors, and stream truncation", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "zcc-blocker-d-"));
+  try {
+    // 1. Genuine malformed archive: valid 4-byte magic, but corrupted internal payload
+    const malformedBundle = join(tempDir, "malformed.tar.zst");
+    await writeFile(malformedBundle, Buffer.from([0x28, 0xb5, 0x2f, 0xfd, 0xff, 0xff, 0xff, 0xff]));
+    const malformedCheck = await verifyArchiveStructure(malformedBundle);
+    assert.equal(malformedCheck.isValid, false);
+    assert.equal(malformedCheck.failureReasonCode, "PAYLOAD_STRUCTURE_CORRUPT");
+
+    // 2. Interrupted archive stream: file truncated to less than 4 bytes (e.g. 2 bytes written before severance)
+    const truncatedBundle = join(tempDir, "truncated.tar.zst");
+    await writeFile(truncatedBundle, Buffer.from([0x28, 0xb5]));
+    const truncatedCheck = await verifyArchiveStructure(truncatedBundle);
+    assert.equal(truncatedCheck.isValid, false);
+    assert.equal(truncatedCheck.failureReasonCode, "STREAM_TRUNCATED");
+
+    // 3. Four-tier verification reports ARTIFACT_FILE_MISSING when bundle directory is missing
+    const missingArtifactResult = await executeFourTierVerification({
+      artifactDirectory: join(tempDir, "missing-dir"),
+      bundleFileName: "test.tar.zst",
+    });
+    assert.equal(missingArtifactResult.status, "VERIFICATION_FAILED");
+    assert.equal(missingArtifactResult.failureReasonCode, "ARTIFACT_FILE_MISSING");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});

@@ -13,6 +13,7 @@ import {
   type ApplicationRuntimeResponse,
 } from "@zima-control-center/application-runtime-client";
 import { createWorkerDiscoveryService } from "./index.js";
+import { startWorkerInternalServer, type WorkerInternalServerHandle } from "./internal-server.js";
 
 export interface EnvironmentSource {
   readonly [name: string]: string | undefined;
@@ -25,6 +26,8 @@ export interface WorkerRuntimeConfig {
   zimaosBaseUrl: string;
   runtimeSocketPath: string;
   observationIntervalMs?: number;
+  internalPort?: number;
+  internalHost?: string;
 }
 
 export type WorkerRuntimeConfigErrorCode =
@@ -124,11 +127,22 @@ export function readWorkerRuntimeConfig(environment: EnvironmentSource): WorkerR
     observationIntervalMs = parsed;
   }
 
+  const rawInternalPort = environment.WORKER_INTERNAL_PORT?.trim();
+  let internalPort: number | undefined;
+  if (rawInternalPort !== undefined && rawInternalPort.length > 0) {
+    const parsed = Number(rawInternalPort);
+    if (Number.isSafeInteger(parsed) && parsed >= 0 && parsed <= 65535) {
+      internalPort = parsed;
+    }
+  }
+  const internalHost = environment.WORKER_INTERNAL_HOST?.trim() || "0.0.0.0";
+
   return {
     databaseUrl,
     zimaosBaseUrl: `${baseUrl.origin}${baseUrl.pathname.replace(/\/$/, "")}`,
     runtimeSocketPath,
     ...(observationIntervalMs !== undefined ? { observationIntervalMs } : {}),
+    ...(internalPort !== undefined ? { internalPort, internalHost } : {}),
   };
 }
 
@@ -139,13 +153,26 @@ export function createWorkerRuntime(config: WorkerRuntimeConfig): WorkerRuntime 
   const gateway = new ApplicationRuntimeGateway({
     socketPath: config.runtimeSocketPath,
   });
+  const destinationRegistry = createDefaultDestinationProviderRegistry();
   const backupOrchestrator = new BackupOrchestratorService(
     prisma,
-    createDefaultDestinationProviderRegistry(),
+    destinationRegistry,
     new DatabaseSourceProvider({
       secretResolver: new EnvironmentDatabaseSecretResolver(),
     }),
   );
+
+  let internalServerHandle: WorkerInternalServerHandle | null = null;
+  if (config.internalPort !== undefined && config.internalPort > 0) {
+    void startWorkerInternalServer({
+      port: config.internalPort,
+      host: config.internalHost ?? "0.0.0.0",
+      destinationRegistry,
+    }).then((h) => {
+      internalServerHandle = h;
+    }).catch(() => {});
+  }
+
   return {
     discovery: createWorkerDiscoveryService(prisma, config.zimaosBaseUrl),
     gateway,
@@ -164,7 +191,12 @@ export function createWorkerRuntime(config: WorkerRuntimeConfig): WorkerRuntime 
       gateway.statusApplication({ applicationId, deploymentId }),
     observeApplicationInspection: (applicationId: string, deploymentId: string) =>
       gateway.inspectApplication({ applicationId, deploymentId }),
-    disconnect: () => prisma.$disconnect(),
+    disconnect: async () => {
+      if (internalServerHandle) {
+        await internalServerHandle.close().catch(() => {});
+      }
+      await prisma.$disconnect().catch(() => {});
+    },
   };
 }
 
