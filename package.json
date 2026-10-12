@@ -13,6 +13,7 @@
     "typecheck": "npm run typecheck --workspaces",
     "pretest": "npm run build",
     "test": "npm run test --workspaces --if-present",
+    "test:backup": "npm run test:backup --workspace=@zima-control-center/core",
     "db:provision": "node apps/api/dist/provision.js",
     "trust-db:generate": "prisma generate --schema prisma/trust/schema.prisma",
     "trust-db:migrate": "prisma migrate deploy --schema prisma/trust/schema.prisma",
