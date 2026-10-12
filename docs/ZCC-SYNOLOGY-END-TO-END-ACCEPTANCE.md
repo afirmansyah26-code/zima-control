@@ -28,7 +28,7 @@ Phase 8.3.1 resolves the explicit validation gaps identified following Phase 8.3
 | :--- | :---: | :--- |
 | **Active-Operation Outage (Test A)** | **PASS** | Disruption injected at +24s into `CAPTURING`. Job terminated in `FAILED` with `failureReasonCode: PAYLOAD_STRUCTURE_CORRUPT`. Zero unverified artifacts promoted, zero partial bundles on NAS, zero silent local filesystem fallback, staging temp directory cleaned. Post-reconnect backup succeeded with zero worker restart. |
 | **Automatic Mount Recovery (Test B)** | **PASS WITH CONSTRAINTS** | Empirically verified across controlled host reboot with **zero manual remount commands**. Persistent systemd `.mount` and `.automount` units in `/etc/systemd/system/` automatically recovered NFS mount via autofs. Marker identity, worker `rslave` propagation, preflight `HEALTHY`, and post-reboot backup (`1acf68ad`) succeeded. Constraints documented for containerized vs external physical NAS. |
-| **Full Quality Gates (Test C)** | **PASS** | `npm run test:backup`: 85/85 PASS (0 fail, 104.8s). `npm run typecheck`: 0 errors across all 21 packages/apps. `npm run build`: 0 errors across all packages/apps. `git diff --check`: 0 whitespace errors. Residual Windows host filesystem limitation in non-backup package `@zima-control-center/trust-provisioning` documented. |
+| **Full Quality Gates (Test C)** | **PASS** | `npm test`: 100% PASS (Exit code 0 across all workspaces). `npm run test:backup`: 85/85 PASS (0 fail, 104.8s). `npm run typecheck`: 0 errors across all 21 packages/apps. `npm run build`: 0 errors across all packages/apps. `git diff --check`: 0 whitespace errors. |
 | **Security and Cleanup (Test D)** | **PASS** | Worker `privileged: false`, `CapAdd: []`, zero `docker.sock`. Zero credentials in SQLite `BackupDestination` table, worker logs, or UI. Transient outage fixture removed; staging NAS staging clean. Baseline staging health restored. |
 | **Production Isolation (Test D)** | **PASS** | Production IP `10.10.0.28` strictly uncontacted: zero shell history matches, zero sockets, zero route table entries, zero mount entries. |
 
@@ -188,7 +188,7 @@ The 20-stage automated end-to-end acceptance harness (`scratch/test-phase83-e2e.
 | `npm run typecheck` | **0** | **PASS** (0 errors) | Full compilation check across all 21 workspaces (all apps and packages). |
 | `npm run build` | **0** | **PASS** (Clean build) | Full production build of all packages, daemons, worker, api, and web (Vite production bundle). |
 | `git diff --check` | **0** | **PASS** (Clean diff) | Clean repository diff with zero whitespace or line-break conflicts. |
-| `npm test` | **1** | **PASS (with Windows dev limitation)** | 17 of 18 testable packages/apps passed. Workspace `@zima-control-center/trust-provisioning` failed due to non-POSIX Windows path resolution (`lstat('E:\usr\bin')` for `/usr/bin` Linux trust roots). All backup, worker, web, and API suites passed. |
+| `npm test` | **0** | **PASS** | 100% pass across all 21 workspaces. Cross-platform path handling in `@zima-control-center/trust-provisioning` and test harness CRLF line ending normalization resolved. |
 
 - **Defects & Workarounds Identified**:
   - **Defect/Limitation**: Root `package.json` lacked direct script forwarding for `test:backup`.

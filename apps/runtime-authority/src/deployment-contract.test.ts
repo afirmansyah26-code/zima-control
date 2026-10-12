@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)), "../../..");
-const read = (path: string) => readFile(resolve(root, path), "utf8");
+const read = async (path: string) => (await readFile(resolve(root, path), "utf8")).replace(/\r\n/g, "\n");
 
 type NativeCompileResult = Readonly<{
   status: number | null;

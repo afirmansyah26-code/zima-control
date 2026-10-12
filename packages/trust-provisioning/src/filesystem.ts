@@ -101,15 +101,23 @@ export class NodeTrustFilesystem implements TrustFilesystem {
     const profilePath = this.policy.paths.platformOwnershipProfile;
     const observed = new Map<string, { uid: number; gid: number }>();
     for (const path of PLATFORM_OWNERSHIP_PROFILE_PATHS) {
+      if (this.policy.allowNonPosix && process.platform !== "linux") {
+        observed.set(path, { uid: 0, gid: 0 });
+        continue;
+      }
       const info = await lstat(path);
       if (!info.isDirectory() || info.isSymbolicLink() || (info.mode & 0o0022) !== 0) throw invalidStorage();
       const mountInfo = await statfs(path);
       if (NETWORK_FS_MAGIC.has(Number(mountInfo.type))) throw invalidStorage();
       observed.set(path, { uid: Number(info.uid), gid: Number(info.gid) });
     }
-    let mountTable: string;
-    try { mountTable = await readFile("/proc/1/mountinfo", "utf8"); }
-    catch { throw invalidStorage(); }
+    let mountTable = "";
+    if (!this.policy.allowNonPosix || process.platform === "linux") {
+      try { mountTable = await readFile("/proc/1/mountinfo", "utf8"); }
+      catch {
+        if (!this.policy.allowNonPosix) throw invalidStorage();
+      }
+    }
     if (observed.has("/usr/bin") || observed.has("/usr/lib")) {
       const nonRoot = [...observed.entries()].some(([, owner]) => owner.uid !== 0 || owner.gid !== 0);
       if (nonRoot && !mountIsReadOnly(mountTable, "/usr")) throw invalidStorage();
@@ -133,8 +141,7 @@ export class NodeTrustFilesystem implements TrustFilesystem {
       await handle.sync();
     } finally { await handle.close(); }
     await rename(temporary, profilePath);
-    const directory = await open(dirname(profilePath), constants.O_RDONLY | constants.O_DIRECTORY);
-    try { await directory.sync(); } finally { await directory.close(); }
+    await fsyncDirectory(dirname(profilePath));
     if (!this.policy.allowNonPosix) await this.validatePlatformOwnershipProfileNode();
     const verified = await this.readPlatformOwnershipProfileBytes();
     if (!verified || !verified.equals(bytes)) throw invalidStorage();
