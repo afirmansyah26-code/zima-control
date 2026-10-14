@@ -98,18 +98,23 @@ test("WorkerInternalServer: destination preflight validates payload and handles 
   });
 
   try {
-    // 1. Malformed JSON
+    // 1. Malformed JSON syntax must return HTTP 400 with generic error (no parser leak)
     const resMalformed = await fetch(`http://127.0.0.1:${handle.port}/internal/destinations/preflight`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-Worker-Token": TEST_SECRET,
       },
-      body: "this is not valid json",
+      body: "this is not valid json {",
     });
-    assert.equal(resMalformed.status, 500);
+    assert.equal(resMalformed.status, 400);
+    const bodyMalformed = await resMalformed.json() as any;
+    assert.equal(bodyMalformed.error, "BAD_REQUEST");
+    assert.equal(bodyMalformed.message, "Malformed or invalid JSON payload");
+    assert.equal(bodyMalformed.stack, undefined);
+    assert.ok(!JSON.stringify(bodyMalformed).includes("SyntaxError"));
 
-    // 2. Missing required fields
+    // 2. Missing required fields in object
     const resMissingFields = await fetch(`http://127.0.0.1:${handle.port}/internal/destinations/preflight`, {
       method: "POST",
       headers: {
@@ -119,8 +124,77 @@ test("WorkerInternalServer: destination preflight validates payload and handles 
       body: JSON.stringify({ destinationId: "probe-1" }),
     });
     assert.equal(resMissingFields.status, 400);
+    const bodyMissing = await resMissingFields.json() as any;
+    assert.equal(bodyMissing.error, "BAD_REQUEST");
+    assert.equal(bodyMissing.message, "Missing or invalid required destination fields");
 
-    // 3. Valid preflight request
+    // 3. Non-object payloads (array, string, number, null) must return HTTP 400
+    for (const invalidPayload of [[], "string-literal", 12345, null]) {
+      const resNonObj = await fetch(`http://127.0.0.1:${handle.port}/internal/destinations/preflight`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Worker-Token": TEST_SECRET,
+        },
+        body: JSON.stringify(invalidPayload),
+      });
+      assert.equal(resNonObj.status, 400);
+      const bodyNonObj = await resNonObj.json() as any;
+      assert.equal(bodyNonObj.error, "BAD_REQUEST");
+    }
+
+    // 4. Invalid requiredBytes parameter
+    const resBadBytes = await fetch(`http://127.0.0.1:${handle.port}/internal/destinations/preflight`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Worker-Token": TEST_SECRET,
+      },
+      body: JSON.stringify({
+        destinationId: "probe-1",
+        basePath: "/zcc-destinations/probe-1",
+        type: "SYNOLOGY_NAS",
+        requiredBytes: "not-a-number",
+      }),
+    });
+    assert.equal(resBadBytes.status, 400);
+    const bodyBadBytes = await resBadBytes.json() as any;
+    assert.equal(bodyBadBytes.error, "BAD_REQUEST");
+    assert.equal(bodyBadBytes.message, "Invalid requiredBytes parameter");
+
+    // 5. Unsupported destination type
+    const throwingRegistry = {
+      resolve: () => {
+        throw new Error("Unsupported destination type");
+      },
+    } as unknown as BackupDestinationProviderRegistry;
+    const handleThrowing = await startWorkerInternalServer({
+      port: 0,
+      host: "127.0.0.1",
+      destinationRegistry: throwingRegistry,
+      internalSecret: TEST_SECRET,
+    });
+    try {
+      const resUnsupported = await fetch(`http://127.0.0.1:${handleThrowing.port}/internal/destinations/preflight`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Worker-Token": TEST_SECRET,
+        },
+        body: JSON.stringify({
+          basePath: "/zcc-destinations/unknown",
+          type: "UNSUPPORTED_TYPE",
+        }),
+      });
+      assert.equal(resUnsupported.status, 400);
+      const bodyUnsupported = await resUnsupported.json() as any;
+      assert.equal(bodyUnsupported.error, "BAD_REQUEST");
+      assert.equal(bodyUnsupported.message, "Unsupported or invalid destination type");
+    } finally {
+      await handleThrowing.close();
+    }
+
+    // 6. Valid preflight request
     const resValid = await fetch(`http://127.0.0.1:${handle.port}/internal/destinations/preflight`, {
       method: "POST",
       headers: {
@@ -167,7 +241,7 @@ test("WorkerInternalServer: enforces 16KB payload limit", async () => {
       body: hugePayload,
     }).catch((err) => ({ status: 500, error: err }));
 
-    assert.ok(res.status >= 400 || "error" in res);
+    assert.ok(res.status === 413 || res.status === 400 || "error" in res);
   } finally {
     await handle.close();
   }
@@ -186,6 +260,74 @@ test("WorkerInternalServer: returns 404 for unknown endpoints", async () => {
       headers: { "X-Worker-Token": TEST_SECRET },
     });
     assert.equal(res.status, 404);
+    const body = await res.json() as any;
+    assert.equal(body.error, "NOT_FOUND");
+    assert.equal(body.message, "Endpoint not found");
+  } finally {
+    await handle.close();
+  }
+});
+
+test("WorkerInternalServer: fails closed when requireSecret is set but secret is missing", async () => {
+  await assert.rejects(
+    async () => {
+      await startWorkerInternalServer({
+        port: 0,
+        host: "127.0.0.1",
+        destinationRegistry: createMockRegistry(),
+        requireSecret: true,
+        // internalSecret intentionally omitted
+      });
+    },
+    { message: /Worker internal server requires internalSecret/ },
+  );
+});
+
+test("WorkerInternalServer: responses never leak stack traces, sensitive paths, or tokens", async () => {
+  const handle = await startWorkerInternalServer({
+    port: 0,
+    host: "127.0.0.1",
+    destinationRegistry: createMockRegistry(),
+    internalSecret: TEST_SECRET,
+  });
+
+  try {
+    const endpoints: Array<{
+      url: string;
+      method?: string;
+      headers: Record<string, string>;
+      body?: string;
+    }> = [
+      { url: "/internal/health", headers: {} }, // 401
+      { url: "/internal/health", headers: { "X-Worker-Token": "bad-token" } }, // 401
+      { url: "/internal/unknown-probe", headers: { "X-Worker-Token": TEST_SECRET } }, // 404
+      {
+        url: "/internal/destinations/preflight",
+        method: "POST",
+        headers: { "X-Worker-Token": TEST_SECRET, "Content-Type": "application/json" },
+        body: "{ broken json",
+      }, // 400
+      {
+        url: "/internal/destinations/preflight",
+        method: "POST",
+        headers: { "X-Worker-Token": TEST_SECRET, "Content-Type": "application/json" },
+        body: JSON.stringify({ missing: "fields" }),
+      }, // 400
+    ];
+
+    for (const ep of endpoints) {
+      const res = await fetch(`http://127.0.0.1:${handle.port}${ep.url}`, {
+        method: ep.method ?? "GET",
+        headers: ep.headers,
+        body: ep.body,
+      });
+      const text = await res.text();
+      assert.ok(!text.includes("stack"), `Response leaked stack trace: ${text}`);
+      assert.ok(!text.includes("SyntaxError"), `Response leaked SyntaxError: ${text}`);
+      assert.ok(!text.includes(TEST_SECRET), `Response leaked secret: ${text}`);
+      assert.ok(!text.includes("node_modules"), `Response leaked node_modules: ${text}`);
+      assert.ok(!text.includes("/project"), `Response leaked project path: ${text}`);
+    }
   } finally {
     await handle.close();
   }

@@ -20,6 +20,7 @@ export interface WorkerInternalServerOptions {
   readonly host?: string;
   readonly destinationRegistry: BackupDestinationProviderRegistry;
   readonly internalSecret?: string;
+  readonly requireSecret?: boolean;
   readonly log?: (msg: string) => void;
 }
 
@@ -31,6 +32,13 @@ export interface WorkerInternalServerHandle {
 }
 
 const MAX_BODY_BYTES = 16 * 1024; // 16 KB
+
+export class PayloadTooLargeError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "PayloadTooLargeError";
+  }
+}
 
 function safeCompare(a: string, b: string): boolean {
   const bufA = Buffer.from(a, "utf8");
@@ -48,7 +56,12 @@ export async function startWorkerInternalServer(
   const port = options.port ?? 3001;
   const registry = options.destinationRegistry;
   const internalSecret = options.internalSecret?.trim();
+  const requireSecret = options.requireSecret ?? false;
   const log = options.log ?? (() => {});
+
+  if (requireSecret && (!internalSecret || internalSecret.length === 0)) {
+    throw new Error("Worker internal server requires internalSecret but none was configured");
+  }
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = req.url ?? "/";
@@ -80,31 +93,77 @@ export async function startWorkerInternalServer(
 
     // Route: POST /internal/destinations/preflight
     if (method === "POST" && url === "/internal/destinations/preflight") {
+      let bodyBuffer: Buffer;
       try {
-        const bodyBuffer = await readRequestBody(req, MAX_BODY_BYTES);
-        const payload = JSON.parse(bodyBuffer.toString("utf8"));
-
-        if (!payload.basePath || !payload.type) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Missing required destination fields" }));
+        bodyBuffer = await readRequestBody(req, MAX_BODY_BYTES);
+      } catch (err: any) {
+        if (err instanceof PayloadTooLargeError) {
+          res.writeHead(413, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "PAYLOAD_TOO_LARGE", message: "Request payload exceeded size limit" }));
           return;
         }
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "BAD_REQUEST", message: "Failed to read request body" }));
+        return;
+      }
 
-        const destination = {
-          id: String(payload.destinationId || "probe"),
-          name: String(payload.name || "probe"),
-          type: payload.type as DestinationType,
-          basePath: String(payload.basePath),
-          isActive: true,
-          configJsonRedacted: null,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        };
+      let payload: any;
+      try {
+        payload = JSON.parse(bodyBuffer.toString("utf8"));
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "BAD_REQUEST", message: "Malformed or invalid JSON payload" }));
+        return;
+      }
 
-        const provider = registry.resolve(destination);
-        const timeoutMs = typeof payload.timeoutMs === "number" ? payload.timeoutMs : 10000;
-        const requiredBytes = payload.requiredBytes ? BigInt(payload.requiredBytes) : undefined;
+      if (
+        !payload ||
+        typeof payload !== "object" ||
+        Array.isArray(payload) ||
+        typeof payload.basePath !== "string" ||
+        !payload.basePath.trim() ||
+        typeof payload.type !== "string" ||
+        !payload.type.trim()
+      ) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "BAD_REQUEST", message: "Missing or invalid required destination fields" }));
+        return;
+      }
 
+      let requiredBytes: bigint | undefined;
+      if (payload.requiredBytes !== undefined && payload.requiredBytes !== null) {
+        try {
+          requiredBytes = BigInt(payload.requiredBytes);
+        } catch {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "BAD_REQUEST", message: "Invalid requiredBytes parameter" }));
+          return;
+        }
+      }
+
+      const destination = {
+        id: typeof payload.destinationId === "string" && payload.destinationId.trim() ? payload.destinationId.trim() : "probe",
+        name: typeof payload.name === "string" && payload.name.trim() ? payload.name.trim() : "probe",
+        type: payload.type.trim() as DestinationType,
+        basePath: payload.basePath.trim(),
+        isActive: true,
+        configJsonRedacted: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      let provider;
+      try {
+        provider = registry.resolve(destination);
+      } catch {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "BAD_REQUEST", message: "Unsupported or invalid destination type" }));
+        return;
+      }
+
+      const timeoutMs = typeof payload.timeoutMs === "number" && payload.timeoutMs > 0 ? payload.timeoutMs : 10000;
+
+      try {
         const health = await provider.preflight(destination, {
           timeoutMs,
           requiredBytes,
@@ -125,13 +184,13 @@ export async function startWorkerInternalServer(
           }),
         );
       } catch (err: any) {
-        log(`[WorkerInternalServer] Preflight error: ${err.message}`);
+        log(`[WorkerInternalServer] Preflight error: ${err?.message ?? err}`);
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
             status: "UNAVAILABLE",
             reasonCode: "WORKER_UNAVAILABLE",
-            detail: err.message ?? "Internal worker preflight error",
+            detail: "Internal worker preflight error",
           }),
         );
       }
@@ -140,7 +199,7 @@ export async function startWorkerInternalServer(
 
     // 404 for any other route
     res.writeHead(404, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ error: "Not Found" }));
+    res.end(JSON.stringify({ error: "NOT_FOUND", message: "Endpoint not found" }));
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -174,7 +233,7 @@ function readRequestBody(req: IncomingMessage, maxBytes: number): Promise<Buffer
       receivedBytes += chunk.length;
       if (receivedBytes > maxBytes) {
         req.destroy();
-        reject(new Error(`Request body exceeded maximum limit of ${maxBytes} bytes`));
+        reject(new PayloadTooLargeError(`Request body exceeded maximum limit of ${maxBytes} bytes`));
         return;
       }
       chunks.push(chunk);
