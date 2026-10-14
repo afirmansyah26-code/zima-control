@@ -1,11 +1,11 @@
-# ZCC — Production Rollout & Rollback Runbook (Phase 9.1.2)
+# ZCC — Production Rollout & Rollback Runbook (Phase 9.1.3)
 
 | Metadata | Value |
 | :--- | :--- |
 | **Document** | Production Deployment & Rollback Runbook |
-| **Phase** | Phase 9.1.2 — Release Provenance Reconciliation & Internal Network Hardening |
+| **Phase** | Phase 9.1.3 — Final Security Closure & Release Gate |
 | **Target Host (Reference Only)** | ZimaOS `10.10.0.28` (`ZimaCube`, Linux Kernel `6.18.9 x86_64`) |
-| **Release Baseline Commit** | `c0e5ea89104b341f238fa0c0423c52a0a25fa2be` |
+| **Release Baseline Commit** | `51caacab0cc67dac809a180851aa4e16459a5d76` |
 | **Prerequisite Audit** | `docs/ZCC-PRODUCTION-READINESS-AUDIT.md` |
 | **Destination Technical Design** | `docs/ZCC-SYNOLOGY-DESTINATION-DESIGN.md` |
 | **Authoritative Architecture** | `docs/ZCC-PRODUCT-ARCHITECTURE-AND-SCOPE.md` |
@@ -13,7 +13,7 @@
 
 > [!WARNING]
 > **OPERATIONAL NOTICE**:
-> This runbook is a **planned operational specification**. In accordance with Phase 9.1.2 constraints, **NO COMMANDS in this runbook were executed against production (`10.10.0.28`)**.
+> This runbook is a **planned operational specification**. In accordance with Phase 9.1.3 constraints, **NO COMMANDS in this runbook were executed against production (`10.10.0.28`)**.
 > Execution of this runbook requires formal resolution of all audit blockers and a signed GO decision.
 
 ---
@@ -56,10 +56,10 @@ PROD_WORKER_INTERNAL_SECRET="<GENERATE_SECURE_RANDOM_SECRET>"
 - **Action**: Verify local repository is checked out at the approved release commit and working tree is clean.
 - **Runbook Command**:
   ```bash
-  git checkout c0e5ea89104b341f238fa0c0423c52a0a25fa2be
+  git checkout 51caacab0cc67dac809a180851aa4e16459a5d76
   git status
   ```
-- **Expected Result**: `HEAD detached at c0e5ea8`, `nothing to commit, working tree clean`.
+- **Expected Result**: `HEAD detached at 51caaca`, `nothing to commit, working tree clean`.
 - **Failure Condition**: Uncommitted changes or different commit SHA.
 - **Rollback Action**: Abort rollout. Run `git reset --hard` or re-checkout approved commit.
 
@@ -88,9 +88,9 @@ PROD_WORKER_INTERNAL_SECRET="<GENERATE_SECURE_RANDOM_SECRET>"
   docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/web:v0.1.0-rc2
   ```
 - **Expected Result**: Image digests match build manifest; zero runtime diffs:
-  - `zcc-api`: `sha256:57e5b76b9d8871a6ad3cd0befc5c9fe19d8cbefa86f75dc8737f9d65f243fc15`
-  - `zcc-worker`: `sha256:97872ee7da4f1b6a199d5b65e20f57df819e394ef9feeaee310fd5e93b9d60b0`
-  - `zcc-web`: `sha256:246938d1e64e41637f520e0ab24c423c6d161ec73495099739ae50c0c775c6cd`
+  - `zcc-api`: `sha256:d9b9d2afc7764e43220ae29594c89d22ceee95635a3575ccce28fc54440eb914`
+  - `zcc-worker`: `sha256:ed0f7f709ea3f7df9d3cd2aeb3e760af587bc2a6ca00e725008b6d385c068828`
+  - `zcc-web`: `sha256:a99a4412806128c2bfae70a3e3755a470a5262ead11369bdc558089a0131cec2`
 - **Failure Condition**: Images corrupted or missing expected tags.
 - **Rollback Action**: Delete faulty images with `docker rmi`; rebuild from scratch.
 
@@ -403,7 +403,7 @@ PROD_WORKER_INTERNAL_SECRET="<GENERATE_SECURE_RANDOM_SECRET>"
 - **Action**: Record deployment metadata and freeze baseline state.
 - **Runbook Command**:
   ```bash
-  echo "DEPLOYED: $(date -u --iso-8601=seconds) COMMIT: c0e5ea8" >> /DATA/AppData/zima-control-center/deployment.log
+  echo "DEPLOYED: $(date -u --iso-8601=seconds) COMMIT: 51caaca" >> /DATA/AppData/zima-control-center/deployment.log
   ```
 - **Expected Result**: Checkpoint committed. Operational handover complete.
 
