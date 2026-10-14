@@ -758,6 +758,7 @@ export function sanitizeDisplayLocation(
 
 export interface DelegatedDestinationProviderOptions {
   readonly workerInternalUrl: string;
+  readonly workerInternalSecret?: string;
   readonly timeoutMs?: number;
   readonly destinationType?: DestinationType;
   readonly localProvider?: BackupDestinationProvider;
@@ -773,6 +774,7 @@ export interface DelegatedDestinationProviderOptions {
 export class DelegatedDestinationProvider implements BackupDestinationProvider {
   public readonly destinationType: DestinationType;
   private readonly workerInternalUrl: string;
+  private readonly workerInternalSecret?: string;
   private readonly timeoutMs: number;
   private readonly localProvider?: BackupDestinationProvider;
   private readonly fetchImpl: typeof fetch;
@@ -780,6 +782,7 @@ export class DelegatedDestinationProvider implements BackupDestinationProvider {
   public constructor(options: DelegatedDestinationProviderOptions) {
     this.destinationType = options.destinationType ?? "SYNOLOGY_NAS";
     this.workerInternalUrl = options.workerInternalUrl.replace(/\/$/, "");
+    this.workerInternalSecret = options.workerInternalSecret?.trim();
     this.timeoutMs = options.timeoutMs ?? 10000;
     this.localProvider = options.localProvider;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
@@ -835,6 +838,7 @@ export class DelegatedDestinationProvider implements BackupDestinationProvider {
           headers: {
             "Content-Type": "application/json",
             "X-Correlation-Id": correlationId,
+            ...(this.workerInternalSecret ? { "X-Worker-Token": this.workerInternalSecret } : {}),
           },
           body: JSON.stringify({
             destinationId: destination.id,

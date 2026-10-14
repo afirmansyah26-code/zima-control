@@ -38,6 +38,7 @@ export interface ApiRuntimeConfig {
   mutationCapabilityMode: ProductionCapabilityMode;
   runtimeSocketPath?: string;
   workerInternalUrl?: string;
+  workerInternalSecret?: string;
 }
 
 export const productionCapabilityModes = [
@@ -160,6 +161,11 @@ export function readApiRuntimeConfig(environment: EnvironmentSource): ApiRuntime
     ? rawWorkerInternalUrl
     : undefined;
 
+  const rawWorkerInternalSecret = environment.WORKER_INTERNAL_SECRET?.trim();
+  const workerInternalSecret = rawWorkerInternalSecret && rawWorkerInternalSecret.length > 0
+    ? rawWorkerInternalSecret
+    : undefined;
+
   return {
     host,
     port,
@@ -169,6 +175,7 @@ export function readApiRuntimeConfig(environment: EnvironmentSource): ApiRuntime
     mutationCapabilityMode,
     runtimeSocketPath,
     ...(workerInternalUrl ? { workerInternalUrl } : {}),
+    ...(workerInternalSecret ? { workerInternalSecret } : {}),
   };
 }
 
@@ -278,6 +285,7 @@ export function composeApiRuntimeWithPrisma(
     registry.register(
       new DelegatedDestinationProvider({
         workerInternalUrl: config.workerInternalUrl,
+        workerInternalSecret: config.workerInternalSecret,
       }),
     );
     destinationRegistry = registry;

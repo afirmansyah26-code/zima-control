@@ -28,6 +28,7 @@ export interface WorkerRuntimeConfig {
   observationIntervalMs?: number;
   internalPort?: number;
   internalHost?: string;
+  internalSecret?: string;
 }
 
 export type WorkerRuntimeConfigErrorCode =
@@ -136,6 +137,10 @@ export function readWorkerRuntimeConfig(environment: EnvironmentSource): WorkerR
     }
   }
   const internalHost = environment.WORKER_INTERNAL_HOST?.trim() || "0.0.0.0";
+  const rawInternalSecret = environment.WORKER_INTERNAL_SECRET?.trim();
+  const internalSecret = rawInternalSecret && rawInternalSecret.length > 0
+    ? rawInternalSecret
+    : undefined;
 
   return {
     databaseUrl,
@@ -143,6 +148,7 @@ export function readWorkerRuntimeConfig(environment: EnvironmentSource): WorkerR
     runtimeSocketPath,
     ...(observationIntervalMs !== undefined ? { observationIntervalMs } : {}),
     ...(internalPort !== undefined ? { internalPort, internalHost } : {}),
+    ...(internalSecret !== undefined ? { internalSecret } : {}),
   };
 }
 
@@ -168,6 +174,7 @@ export function createWorkerRuntime(config: WorkerRuntimeConfig): WorkerRuntime 
       port: config.internalPort,
       host: config.internalHost ?? "0.0.0.0",
       destinationRegistry,
+      internalSecret: config.internalSecret,
     }).then((h) => {
       internalServerHandle = h;
     }).catch(() => {});

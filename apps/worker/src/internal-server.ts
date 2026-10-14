@@ -12,12 +12,14 @@
  */
 
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import type { BackupDestinationProviderRegistry, DestinationType } from "@zima-control-center/core";
 
 export interface WorkerInternalServerOptions {
   readonly port?: number;
   readonly host?: string;
   readonly destinationRegistry: BackupDestinationProviderRegistry;
+  readonly internalSecret?: string;
   readonly log?: (msg: string) => void;
 }
 
@@ -30,18 +32,44 @@ export interface WorkerInternalServerHandle {
 
 const MAX_BODY_BYTES = 16 * 1024; // 16 KB
 
+function safeCompare(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
+}
+
 export async function startWorkerInternalServer(
   options: WorkerInternalServerOptions,
 ): Promise<WorkerInternalServerHandle> {
   const host = options.host ?? "0.0.0.0";
   const port = options.port ?? 3001;
   const registry = options.destinationRegistry;
+  const internalSecret = options.internalSecret?.trim();
   const log = options.log ?? (() => {});
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const url = req.url ?? "/";
     const method = req.method ?? "GET";
     const correlationId = (req.headers["x-correlation-id"] as string) || "internal";
+
+    // Authentication boundary: enforce shared secret token when configured
+    if (internalSecret && internalSecret.length > 0) {
+      const rawHeader = req.headers["x-worker-token"] ?? req.headers["authorization"];
+      let token: string | undefined;
+      if (typeof rawHeader === "string") {
+        token = rawHeader.startsWith("Bearer ") ? rawHeader.slice(7).trim() : rawHeader.trim();
+      }
+
+      if (!token || !safeCompare(token, internalSecret)) {
+        log(`[WorkerInternalServer] Rejected unauthorized request to ${url}`);
+        res.writeHead(401, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "UNAUTHORIZED", message: "Invalid or missing internal worker authorization token" }));
+        return;
+      }
+    }
 
     // Route: GET /internal/health
     if (method === "GET" && url === "/internal/health") {

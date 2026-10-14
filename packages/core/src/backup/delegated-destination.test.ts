@@ -77,6 +77,62 @@ test("DelegatedDestinationProvider: delegates preflight to worker HTTP server an
   }
 });
 
+test("DelegatedDestinationProvider: passes X-Worker-Token header when workerInternalSecret is set", async () => {
+  let receivedToken: string | undefined;
+
+  const server = createServer((req, res) => {
+    receivedToken = req.headers["x-worker-token"] as string;
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        status: "AVAILABLE",
+        detail: "Health check ok",
+        checkedAt: new Date().toISOString(),
+      }),
+    );
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const port = (server.address() as any).port;
+
+  try {
+    const provider = new DelegatedDestinationProvider({
+      workerInternalUrl: `http://127.0.0.1:${port}`,
+      workerInternalSecret: "my-secret-token-123",
+    });
+
+    const health = await provider.preflight(mockDestination);
+    assert.equal(health.status, "AVAILABLE");
+    assert.equal(receivedToken, "my-secret-token-123");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test("DelegatedDestinationProvider: fails closed with WORKER_UNAVAILABLE on 401 Unauthorized", async () => {
+  const server = createServer((req, res) => {
+    res.writeHead(401, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "UNAUTHORIZED" }));
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const port = (server.address() as any).port;
+
+  try {
+    const provider = new DelegatedDestinationProvider({
+      workerInternalUrl: `http://127.0.0.1:${port}`,
+      workerInternalSecret: "bad-secret",
+    });
+
+    const health = await provider.preflight(mockDestination);
+    assert.equal(health.status, "UNAVAILABLE");
+    assert.equal(health.reasonCode, "WORKER_UNAVAILABLE");
+    assert.ok(health.detail?.includes("HTTP 401"));
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test("DelegatedDestinationProvider: fails closed with WORKER_UNAVAILABLE when worker is unreachable", async () => {
   const provider = new DelegatedDestinationProvider({
     workerInternalUrl: "http://127.0.0.1:49999", // closed port
