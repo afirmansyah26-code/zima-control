@@ -1,12 +1,12 @@
-# ZCC — Production Readiness Audit (Phase 9.1.3)
+# ZCC — Production Readiness Audit (Phase 9.1.4)
 
 | Metadata | Value |
 | :--- | :--- |
 | **Document** | Production Readiness Audit Report |
-| **Phase** | Phase 9.1.3 — Final Security Closure & Release Gate |
+| **Phase** | Phase 9.1.4 — Release Artifact Freeze & Documentation Correction |
 | **Audit Status** | **NO-GO FOR IMMEDIATE DEPLOYMENT (READY WITH BLOCKERS — AWAITING INFRASTRUCTURE INPUTS)** |
 | **Audit Date** | 2026-10-14 |
-| **Baseline Release Commit** | `51caacab0cc67dac809a180851aa4e16459a5d76` (`master`) |
+| **Baseline Release Commit** | `9a404956b31ce8274db8de7bac1626258f40c284` (`master`) |
 | **Production Target (Reference Only)** | ZimaOS `10.10.0.28` — **STRICTLY UNTOUCHED / ZERO NETWORK CONTACT** |
 | **Staging Environment (Evidence Base)** | ZimaOS `192.168.56.101` (ZimaCube, Kernel `6.18.9 x86_64`) |
 | **Authoritative Technical PRD** | `docs/ZCC-BACKUP-FOUNDATION-PRD.md` |
@@ -23,15 +23,15 @@ Phase 9 executes a non-invasive, evidence-based **Production Readiness Audit** f
 The audit systematically evaluates whether the ZCC codebase, Docker container topology, storage mount mechanisms, security invariants, credential management, quality gates, and operational documentation are ready for production deployment onto ZimaOS (`10.10.0.28`).
 
 ### Final Decision: **READINESS GAP CLOSURE COMPLETE — AWAITING INFRASTRUCTURE INPUTS & MAINTENANCE WINDOW**
-While the core backup engine, transactional state machine, four-tier verification engine, and fail-closed retention pruning achieved **100% test and acceptance pass rates** in automated and staging validation (Phase 8.3 & 8.3.1), Phase 9.1, 9.1.2, and 9.1.3 have systematically resolved all code, architectural, and security blockers:
+While the core backup engine, transactional state machine, four-tier verification engine, and fail-closed retention pruning achieved **100% test and acceptance pass rates** in automated and staging validation (Phase 8.3 & 8.3.1), Phase 9.1, 9.1.2, 9.1.3, and 9.1.4 have systematically resolved all code, architectural, release artifact identity, and security blockers:
 
-1. **Release Provenance & Reproducibility Blocker**: **RESOLVED**. Git ancestry was formally reconciled: commit `51caaca` (`51caacab0cc67dac809a180851aa4e16459a5d76`) directly descends from `c0e5ea8`, `b8146ef`, and `c7bbfa9`, preserving all destination delegation, network isolation, and mount contracts. Release candidate 2 (`v0.1.0-rc2`) was rebuilt cleanly from frozen Git source archive `release-51caaca.tar.gz` (SHA-256 `aea0bd3eba7f89dbeb3c80537c6e8fd819ef5765f1cd82b349864a64cb62a87f`). Zero `/app` diffs exist in container writable layers.
+1. **Release Artifact Identity & Freeze Blocker**: **RESOLVED**. Prior Phase 9.1.2 RC2 images used different image IDs from the Phase 9.1.3 rebuild despite reusing the tag `v0.1.0-rc2`. To eliminate release candidate artifact collision and establish immutable provenance, Phase 9.1.4 assigned **`v0.1.0-rc3`** as the new immutable release candidate identifier. Images were built from clean source commit `9a404956b31ce8274db8de7bac1626258f40c284` via frozen source archive `scratch/release-9a40495.tar.gz` (SHA-256 `582a7e78f49eacbc15373438b76c7f92832d5a17f265be42bb7c916b43a41767`). The staging `compose.yaml` pins `:v0.1.0-rc3`. Running containers were audited: zero `/app` patches exist in writable layers.
 2. **Container Filesystem Separation Blocker**: **RESOLVED**. Repository and staging `compose.yaml` mount `/DATA/.zcc-nas:/zcc-destinations:rslave,rw` **strictly into `zcc-worker`**. `zcc-api` and `zcc-web` have **zero NAS filesystem mounts**. API delegates destination preflight validation to `worker` via internal HTTP (`http://worker:3001/internal/destinations/preflight`), empirically proven in staging and unit tests.
 3. **Internal API/Worker Defense-in-Depth & Secret Hygiene**: **RESOLVED**. Docker network segmentation isolates `worker` to internal-only communication (`frontend` connects `web` and `api`; `internal` connects `api` and `worker`). `web` cannot resolve or route to `worker`. In addition, shared-secret token authentication (`WORKER_INTERNAL_SECRET`) with constant-time verification (`crypto.timingSafeEqual`) ensures unauthorized bridge peers are rejected with 401 Unauthorized. Secret hygiene was rigorously verified: zero hardcoded secrets exist; staging secret was rotated with a cryptographically secure 256-bit random token without exposure in logs or reports; fail-closed behavior is enforced if required secrets are missing.
 4. **Malformed JSON & Information Leak Sanitization**: **RESOLVED**. Worker internal server parses JSON strictly: invalid JSON syntax immediately returns generic HTTP 400 Bad Request (`{"error":"BAD_REQUEST","message":"Malformed or invalid JSON payload"}`), eliminating unhandled 500 parse exceptions. Invalid schemas, non-objects, arrays, missing destination fields, invalid `requiredBytes`, and unsupported types return 400. Unknown routes return 404; missing/invalid tokens return 401. Response sanitization was audited: zero stack traces, `SyntaxError`, tokens, or internal file paths are leaked in any error response.
 5. **Cross-Platform Quality Gate Blocker**: **RESOLVED**. Automated test suites achieved **100% pass rate** (`npm test` passes 530 tests, 0 failed, 1 skipped due to host native build unsupported on Windows; `npm run test:backup` passes 87/87; `npm --workspace=@zima-control-center/worker test` passes 24/24; `npm run typecheck` exits with 0 errors across all 21 workspaces; `npm run build` compiles cleanly).
-6. **Staging RC2 End-to-End Acceptance**: **PASS**. Synology NAS end-to-end backup validation on staging VM `192.168.56.101` succeeded: preflight succeeded via authenticated worker internal delegation, backup job `47e0ee41-d7d8-42ce-9fe5-ead45f6b7854` reached `COMPLETED` with `VERIFIED` artifact, and physical bundle and manifest were verified on the Synology share.
-7. **Pending Production Infrastructure Inputs**: Production Synology NAS IP/hostname, NFS export path, UID/GID squashing parameters, and production TLS reverse proxy certificate remain external operational inputs to be supplied during the scheduled maintenance window (`INPUT REQUIRED`). Production `10.10.0.28` remains strictly uncontacted.
+6. **Staging RC3 End-to-End Acceptance**: **PASS**. Synology NAS end-to-end backup validation on staging VM `192.168.56.101` succeeded running RC3 containers: preflight succeeded via authenticated worker internal delegation, backup job `eca35611-73db-4be5-9d9b-d96e8e21dfb3` reached `COMPLETED` with `VERIFIED` artifact, and physical bundle and manifest were verified on the Synology share.
+7. **Production Documentation Distinction & Pending Infrastructure Inputs**: The distinction between client host and target NAS is explicit: `10.10.0.28` is the documented ZimaOS production host; `PROD_NAS_IP` and `PROD_NAS_EXPORT` remain `INPUT REQUIRED` until the infrastructure owner confirms the physical Synology NAS address and export path. NFS export permissions must be confirmed against client IP `10.10.0.28`. HTTPS reverse proxy / TLS certificate and the authorized maintenance window remain `INPUT REQUIRED`. Production `10.10.0.28` remains strictly untouched.
 
 ---
 
@@ -73,11 +73,13 @@ The acceptance evidence reported in `docs/ZCC-SYNOLOGY-END-TO-END-ACCEPTANCE.md`
 ## 4. Repository & Release Integrity Audit
 
 ### 4.1 Git Tree, Ancestry & Provenance Reconciliation
-In Phase 9.1.2 and 9.1.3, a formal reconciliation of Git ancestry and tree completeness was performed across all historical milestones:
+In Phase 9.1.2, 9.1.3, and 9.1.4, a formal reconciliation of Git ancestry and tree completeness was performed across all historical milestones:
 - **Repository Branch**: `master`
-- **HEAD Commit**: `51caacab0cc67dac809a180851aa4e16459a5d76` (`fix(worker): sanitize internal endpoint errors and reject malformed JSON with 400`)
+- **HEAD Commit**: `9a404956b31ce8274db8de7bac1626258f40c284` (`release: pin container images to v0.1.0-rc3 in compose.yaml`)
 - **Working Tree State**: Clean (`git status` shows nothing to commit, working tree clean).
 - **Ancestry Verification & Lineage**:
+  - `9a40495` (Phase 9.1.4: Pin container images to `v0.1.0-rc3` in `compose.yaml`)
+  - `ce8bce9` (Phase 9.1.3: Audit documentation & release gate report)
   - `51caaca` (Phase 9.1.3: Malformed JSON sanitization, schema validation, secret hygiene)
   - `c0e5ea8` (Phase 9.1.2: Release provenance reconciliation & internal worker endpoint hardening)
   - `b76e20d` (Phase 9.1.1: Release candidate verification and audit documentation)
@@ -88,27 +90,35 @@ In Phase 9.1.2 and 9.1.3, a formal reconciliation of Git ancestry and tree compl
   - `git diff c7bbfa9..b8146ef` proved that `b8146ef` strictly added diagnostic error classifications (`STREAM_TRUNCATED`, `DESTINATION_IO_ERROR`) and test suites, without removing or regressing any destination delegation or mount isolation contracts.
   - `c0e5ea8` introduced the Phase 9.1.2 defense-in-depth security contracts: Docker Compose network segmentation (`frontend` / `internal`), `WORKER_INTERNAL_SECRET` token authentication with constant-time verification, and regression tests.
   - `51caaca` closed all residual error sanitization gaps: generic HTTP 400 for malformed JSON syntax and invalid schemas, HTTP 404 for unknown routes, fail-closed secret configuration, and regression test suites.
-- **Verdict**: **PASS (RECONCILED & HARDENED)**. The release baseline (`51caaca`) incorporates the complete, unbroken lineage of architectural, security, and error sanitization controls.
+  - `9a40495` pinned all service definitions in `compose.yaml` to immutable tag `:v0.1.0-rc3`, preventing runtime ambiguity.
+- **Verdict**: **PASS (RECONCILED & FROZEN)**. The release baseline (`9a40495`) incorporates the complete, unbroken lineage of architectural, security, error sanitization, and release configuration controls.
 
-### 4.2 Staging Container Discrepancy & Clean RC2 Build Resolution
-In Phase 9.1.3, all three production images were rebuilt cleanly from verified source commit `51caaca`:
+### 4.2 Release Artifact Collision Analysis & Immutable RC3 Build Resolution
+In previous phases, a release candidate artifact collision occurred: Phase 9.1.2 built images tagged `v0.1.0-rc2` from commit `c0e5ea8`, whereas Phase 9.1.3 rebuilt images from commit `51caaca` and reused the tag `v0.1.0-rc2`. Because the source commit had evolved (adding strict JSON parsing and schema validation), the resulting container image IDs differed between the two builds despite sharing the same tag. Reusing release tags for materially changed source trees breaks immutability and provenance tracking.
 
-1. **Clean Source Packaging**: A pristine source tarball (`release-51caaca.tar.gz`, SHA-256 `aea0bd3eba7f89dbeb3c80537c6e8fd819ef5765f1cd82b349864a64cb62a87f`) was exported directly via `git archive --format=tar.gz HEAD` on verified commit `51caacab0cc67dac809a180851aa4e16459a5d76`. Zero uncommitted files, node_modules, or credentials were included.
-2. **Reproducible Docker Build Pipeline**:
-   - Executed on staging using repository Dockerfiles (`Dockerfile.api`, `Dockerfile.worker`, `Dockerfile.web`):
-     - `docker build -f Dockerfile.api --build-arg HTTP_PROXY=... --build-arg HTTPS_PROXY=... -t zima-control-center/api:v0.1.0-rc2 -t zima-control-center/api:latest .`
-     - `docker build -f Dockerfile.worker --build-arg HTTP_PROXY=... --build-arg HTTPS_PROXY=... -t zima-control-center/worker:v0.1.0-rc2 -t zima-control-center/worker:latest .`
-     - `docker build -f Dockerfile.web --build-arg HTTP_PROXY=... --build-arg HTTPS_PROXY=... -t zima-control-center/web:v0.1.0-rc2 -t zima-control-center/web:latest .`
-3. **Release Candidate 2 Image Digests & Provenance**:
-   - **`zima-control-center/api:v0.1.0-rc2`**: `sha256:d9b9d2afc7764e43220ae29594c89d22ceee95635a3575ccce28fc54440eb914` (Size: 415MB)
-   - **`zima-control-center/worker:v0.1.0-rc2`**: `sha256:ed0f7f709ea3f7df9d3cd2aeb3e760af587bc2a6ca00e725008b6d385c068828` (Size: 458MB)
-   - **`zima-control-center/web:v0.1.0-rc2`**: `sha256:a99a4412806128c2bfae70a3e3755a470a5262ead11369bdc558089a0131cec2` (Size: 48.3MB)
-4. **Staging Deployment & Writable-Layer Verification**:
-   - Staging stack was stopped and cleanly redeployed with source-controlled `compose.yaml`:
-     `docker compose -f /DATA/AppData/zima-control-center/compose.yaml down && docker compose -f /DATA/AppData/zima-control-center/compose.yaml up -d`
-   - `docker inspect` confirmed containers are running the newly built `v0.1.0-rc2` release candidate images.
+To resolve this artifact collision definitively:
+1. **Retirement of `v0.1.0-rc2`**: The tag `v0.1.0-rc2` is formally retired and superseded.
+2. **Assignment of Immutable Release Candidate Identifier**: Assigned **`v0.1.0-rc3`** across all three application container images.
+3. **Source Image ID & Digest Comparison**:
+
+| Component | Phase 9.1.2 RC2 Build (Commit `c0e5ea8`) | Phase 9.1.4 RC3 Build (Commit `9a40495`) | Status |
+| :--- | :--- | :--- | :---: |
+| **`zcc-api`** | `sha256:57e5b76b9d8871a6ad3cd0befc5c9fe19d8cbefa86f75dc8737f9d65f243fc15` | `sha256:d9b9d2afc7764e43220ae29594c89d22ceee95635a3575ccce28fc54440eb914` | **FROZEN RC3** |
+| **`zcc-worker`** | `sha256:97872ee7da4f1b6a199d5b65e20f57df819e394ef9feeaee310fd5e93b9d60b0` | `sha256:ed0f7f709ea3f7df9d3cd2aeb3e760af587bc2a6ca00e725008b6d385c068828` | **FROZEN RC3** |
+| **`zcc-web`** | `sha256:246938d1e64e41637f520e0ab24c423c6d161ec73495099739ae50c0c775c6cd` | `sha256:a99a4412806128c2bfae70a3e3755a470a5262ead11369bdc558089a0131cec2` | **FROZEN RC3** |
+
+4. **Clean Source Packaging**: A pristine source archive (`scratch/release-9a40495.tar.gz`, SHA-256 `582a7e78f49eacbc15373438b76c7f92832d5a17f265be42bb7c916b43a41767`) was exported directly via `git archive --format=tar.gz HEAD` on verified commit `9a404956b31ce8274db8de7bac1626258f40c284`. Zero uncommitted files, node_modules, or credentials were included.
+5. **Reproducible Multi-Stage Docker Build Pipeline**:
+   - Built on staging host `192.168.56.101` using repository Dockerfiles:
+     - `docker build -f Dockerfile.api -t zima-control-center/api:v0.1.0-rc3 -t zima-control-center/api:latest .`
+     - `docker build -f Dockerfile.worker -t zima-control-center/worker:v0.1.0-rc3 -t zima-control-center/worker:latest .`
+     - `docker build -f Dockerfile.web -t zima-control-center/web:v0.1.0-rc3 -t zima-control-center/web:latest .`
+6. **Staging Deployment & Writable-Layer Verification**:
+   - Staging `compose.yaml` explicitly pins `image: zima-control-center/{api,worker,web}:v0.1.0-rc3`.
+   - Redeployed cleanly via `docker compose down && docker compose up -d`.
+   - `docker inspect` verified running containers reference exact image IDs (`d9b9d2af...`, `ed0f7f70...`, `a99a4412...`).
    - `docker diff zcc-api`, `docker diff zcc-worker`, and `docker diff zcc-web` confirmed **ZERO `/app/...` patches or overrides** in container writable layers.
-- **Verdict**: **PASS (RESOLVED)**. Release reproducibility and image provenance are 100% verified.
+- **Verdict**: **PASS (RESOLVED & FROZEN)**. Release reproducibility, immutable provenance, and container runtime integrity are 100% verified.
 
 ---
 
@@ -242,17 +252,27 @@ In Phase 9.1.2, the internal communication boundary between `zcc-api` and `zcc-w
   - Pairing with a `.automount` unit ensures that autofs intercepts worker requests on demand, preventing boot hangs during network interface DHCP negotiation.
 
 ### 7.3.1 Differences Between Staging Acceptance Testing and Physical Synology NAS Validation
-It is critical to distinguish between the validated staging acceptance environment and physical production deployment on Synology NAS hardware:
+It is critical to distinguish between the validated staging acceptance environment and physical production deployment on Synology NAS hardware. In particular, **`10.10.0.28` is the documented ZimaOS production host (the client connecting to the NAS)**; it is **NOT** the IP of the physical Synology NAS server. The physical NAS IP (`PROD_NAS_IP`) and export path (`PROD_NAS_EXPORT`) remain unconfirmed inputs requiring infrastructure team input:
 
-| Dimension | Staging Acceptance Test (`192.168.56.101`) | Physical Synology NAS Production (`10.10.0.28`) |
+| Dimension | Staging Acceptance Test (`192.168.56.101`) | Physical Synology NAS Target (Client: ZimaOS `10.10.0.28`; NAS IP: `PROD_NAS_IP` — INPUT REQUIRED) |
 | :--- | :--- | :--- |
+| **Client Host** | ZimaOS Staging Host (`192.168.56.101`) | ZimaOS Production Host (`10.10.0.28`) |
 | **NFS Server Implementation** | Linux kernel NFS daemon inside Docker container (`disposable-test-nas` on `172.29.0.10`) | Hardware Synology NAS running Synology DSM OS with kernel NFS daemon |
-| **Storage Substrate** | Synthetic Docker bridge volume on local ext4 filesystem | Hardware Btrfs/ext4 RAID storage pool (e.g. `/volume1/zcc-backups`) with checksumming and scrubbing |
-| **Network Path** | Virtual Docker bridge (`172.29.0.0/16`) on local VM interface | Physical 1GbE/10GbE switched LAN between ZimaCube and Synology NAS |
-| **Authentication & Export Rules** | Docker bridge subnet export with anonymous mapping | DSM Control Panel NFS export rule: `all_squash, anonuid=1000, anongid=1000`, restricted to ZimaOS static IP |
+| **NFS Server Address** | `172.29.0.10` (Docker bridge test container) | `<PROD_NAS_IP>` (**INPUT REQUIRED**; must not be assumed or invented) |
+| **Storage Substrate** | Synthetic Docker bridge volume on local ext4 filesystem | Hardware Btrfs/ext4 RAID storage pool (e.g. `<PROD_NAS_EXPORT>` — **INPUT REQUIRED**) with checksumming and scrubbing |
+| **Network Path** | Virtual Docker bridge (`172.29.0.0/16`) on local VM interface | Physical 1GbE/10GbE switched LAN between ZimaOS (`10.10.0.28`) and physical Synology NAS (`<PROD_NAS_IP>`) |
+| **Authentication & Export Rules** | Docker bridge subnet export with anonymous mapping | DSM Control Panel NFS export rule: `all_squash, anonuid=1000, anongid=1000`, confirmed against actual client IP `10.10.0.28` |
 | **Latency & Throughput Profile** | Near-zero loopback bridge latency, no physical switch hops | Variable physical LAN latency, MTU negotiation, jumbo frames (if enabled), physical NAS disk write throughput |
-| **Automount Systemd Target** | Unit target: `172.29.0.10:/` (ephemeral test container) | Unit target: `<PROD_NAS_IP>:<PROD_NAS_EXPORT>` (e.g. `10.10.0.100:/volume1/zcc-backups`) |
-| **Verification Scope** | Proves protocol correctness, mount propagation, marker contract, fail-closed handling, and worker isolation | Requires operational validation of physical DSM export permissions, network routing, and disk capacity during maintenance window |
+| **Automount Systemd Target** | Unit target: `172.29.0.10:/` (ephemeral test container) | Unit target: `<PROD_NAS_IP>:<PROD_NAS_EXPORT>` (both **INPUT REQUIRED**) |
+| **Verification Scope** | Proves protocol correctness, mount propagation, marker contract, fail-closed handling, and worker isolation | Requires operational validation of physical DSM export permissions against client `10.10.0.28`, network routing, and disk capacity during maintenance window |
+
+> [!IMPORTANT]
+> **Operational Distinction**:
+> - `10.10.0.28` is strictly the ZimaOS production host where ZCC containers run.
+> - `PROD_NAS_IP` and `PROD_NAS_EXPORT` remain **INPUT REQUIRED** until confirmed by the infrastructure owner.
+> - NFS export permissions on the Synology DSM must specifically authorize client IP `10.10.0.28`.
+> - HTTPS reverse-proxy configuration and the authorized maintenance window remain **INPUT REQUIRED**.
+> - Production addresses, export paths, hostnames, or TLS certificates must never be invented or assumed.
 
 ### 7.4 Diagnostic Correctness & Error Taxonomy Verification
 In Phase 9.1.1, diagnostic error classification was empirically verified under simulated failure modes using the diagnostic test harness (`scratch/test-diagnostic-correctness.mjs`):
@@ -346,18 +366,23 @@ graph TD
 
 ## 11. Production-Specific Inputs Inventory
 
-The following production infrastructure parameters are **unconfirmed** and must be provided by the system administrator prior to deployment:
+The following production infrastructure parameters are **unconfirmed** and must be provided by the system administrator prior to deployment. In particular, **`10.10.0.28` is the documented ZimaOS production host IP** (the client connecting to the NAS); it is **NOT** the physical Synology NAS address. All NAS and TLS parameters remain `INPUT REQUIRED`:
 
 | Parameter | Required Input | Current Status | Validation Command |
 | :--- | :--- | :---: | :--- |
-| **Synology Hostname / IP** | Dedicated LAN IP of physical Synology NAS | `INPUT REQUIRED` | `ping -c 2 <NAS_IP>` (from ZimaOS) |
-| **NFS Export Share Path** | Synology volume export path (e.g. `/volume1/zcc-backups`) | `INPUT REQUIRED` | `showmount -e <NAS_IP>` |
-| **NFS Export Permissions** | `all_squash, anonuid=1000, anongid=1000, rw, sync` for ZimaOS IP | `INPUT REQUIRED` | Audit Synology DSM NFS Rules |
-| **ZimaOS Production IP** | Static IP assigned to ZimaOS on production LAN | `INPUT REQUIRED` | `ip -4 addr show` |
+| **ZimaOS Production Host IP** | Static IP of ZimaOS client host on production LAN | **Confirmed (`10.10.0.28`)** | `ip -4 addr show` |
+| **Synology Hostname / IP** | Dedicated LAN IP of physical Synology NAS (`PROD_NAS_IP`) | `INPUT REQUIRED` | `ping -c 2 <PROD_NAS_IP>` (from ZimaOS) |
+| **NFS Export Share Path** | Synology volume export path (`PROD_NAS_EXPORT`, e.g. `/volume1/zcc-backups`) | `INPUT REQUIRED` | `showmount -e <PROD_NAS_IP>` |
+| **NFS Export Permissions** | `all_squash, anonuid=1000, anongid=1000, rw, sync` for client `10.10.0.28` | `INPUT REQUIRED` | Audit Synology DSM NFS Rules |
 | **Production Web Port** | Allocated HTTP/HTTPS port for ZCC dashboard | `INPUT REQUIRED` (Default 8080) | `ss -tulpn \| grep 8080` |
-| **Reverse Proxy / TLS Cert** | Domain / certificate for HTTPS termination | `INPUT REQUIRED` | Verify reverse proxy configuration |
+| **Reverse Proxy / TLS Cert** | Domain / certificate for HTTPS reverse proxy termination | `INPUT REQUIRED` | Verify reverse proxy configuration |
 | **Admin Production Password** | High-entropy password for initial administrator | `INPUT REQUIRED` | Generated during bootstrap run |
-| **Minimum NAS Capacity** | Minimum free storage threshold on NAS volume | `INPUT REQUIRED` (Min 100GB) | `df -h /DATA/.zcc-nas/<id>` |
+| **Minimum NAS Capacity** | Minimum free storage threshold on NAS volume (Min 100GB) | `INPUT REQUIRED` | `df -h /DATA/.zcc-nas/<id>` |
+| **Maintenance Window** | Authorized downtime window for production deployment | `INPUT REQUIRED` | Maintenance approval ticket |
+
+> [!CAUTION]
+> **Production Boundary Rule**:
+> Under no circumstances may deployment personnel invent or assume production NAS IP addresses, NFS export paths, hostnames, or TLS configuration. All parameters marked `INPUT REQUIRED` must be confirmed in writing by the infrastructure owner before executing the rollout runbook.
 
 ---
 
@@ -365,7 +390,7 @@ The following production infrastructure parameters are **unconfirmed** and must 
 
 | # | Risk Description | Severity | Likelihood | Impact | Status / Mitigation Strategy |
 | :- | :--- | :--- | :---: | :---: | :--- |
-| **R1** | **Unreproducible Release Images**: Staging ran containers modified with `/tmp/dist.tar.gz`. | **CRITICAL** | High | High | **RESOLVED**. Clean multi-stage Docker builds executed from frozen Git archive `51caaca` (`v0.1.0-rc2`). Image IDs verified with zero `/app` diffs. |
+| **R1** | **Unreproducible Release Images**: Staging ran containers modified with `/tmp/dist.tar.gz`. | **CRITICAL** | High | High | **RESOLVED**. Clean multi-stage Docker builds executed from frozen Git archive `9a40495` (`v0.1.0-rc3`). Image IDs verified with zero `/app` diffs. |
 | **R2** | **API Container NAS Mount Violation**: Mounting `/DATA/.zcc-nas` into `zcc-api` creates unauthorized attack surface on backup archives. | **HIGH** | High | High | **RESOLVED**. Mount removed from `zcc-api` and `zcc-web`. Delegated preflight via internal worker HTTP endpoint. |
 | **R3** | **Plaintext Credential Sniffing**: Web dashboard runs on HTTP without TLS (`AUTH_COOKIE_SECURE=false`). | **HIGH** | Medium | High | **INPUT REQUIRED**. Require reverse proxy TLS termination with valid certificate and `AUTH_COOKIE_SECURE=true`. |
 | **R4** | **Staging Configuration Leak**: Staging IP `172.29.0.10` or containerized service names accidentally referenced in production mount units. | **HIGH** | Low | High | **RESOLVED**. Production runbook audited; zero references to staging test container IP in production unit templates. |
@@ -374,6 +399,7 @@ The following production infrastructure parameters are **unconfirmed** and must 
 | **R7** | **Bridge Network Worker Port Exposure**: Worker internal port 3001 reachable by co-located bridge containers. | **LOW** | Low | Low | **RESOLVED**. Network segmentation in `compose.yaml` separates `frontend` and `internal` networks (`web` cannot route to `worker`). Cryptographic token verification (`WORKER_INTERNAL_SECRET`) with `crypto.timingSafeEqual` rejects unauthorized bridge peers with 401. |
 | **R8** | **Malformed JSON Error Leakage**: Malformed JSON input causing unhandled 500 exceptions with parser trace leakage. | **LOW** | Low | Low | **RESOLVED**. Worker internal server parses JSON strictly: malformed syntax returns generic HTTP 400 Bad Request; invalid schema types return 400; zero stack traces or parser exceptions leaked. |
 | **R9** | **Secret Disclosure in Logs / Reports**: Accidental printing or hardcoding of `WORKER_INTERNAL_SECRET`. | **LOW** | Low | Low | **RESOLVED**. Audited codebase and scripts; rotated staging secret with 256-bit random token without printing values; fail-closed enforcement when secret missing. |
+| **R10** | **Release Artifact Collision / Tag Reuse**: Reusing `v0.1.0-rc2` across different builds broke immutability. | **HIGH** | High | High | **RESOLVED**. Assigned immutable `v0.1.0-rc3`, pinned `compose.yaml`, exported frozen archive `release-9a40495.tar.gz` (SHA-256 `582a7e78...`), and verified digests. |
 
 ---
 
@@ -381,9 +407,9 @@ The following production infrastructure parameters are **unconfirmed** and must 
 
 | Evaluation Category | Gate Requirement | Status | Gate Verdict |
 | :--- | :--- | :---: | :---: |
-| **Gate 1: Acceptance Completion** | Synology E2E acceptance suite passes on staging RC2 (Job `47e0ee41` COMPLETED & VERIFIED) | Verified | **PASS** |
+| **Gate 1: Acceptance Completion** | Synology E2E acceptance suite passes on staging RC3 (Job `eca35611-73db-4be5-9d9b-d96e8e21dfb3` COMPLETED & VERIFIED) | Verified | **PASS** |
 | **Gate 2: Quality Gates** | Full tests (530/530 passed, 1 skipped native), backup tests (87/87), worker tests (24/24), typecheck (0 errors), build clean | Verified | **PASS** |
-| **Gate 3: Release Reproducibility** | Release candidate images (`v0.1.0-rc2`) built from clean Git archive `51caaca`; zero writable layer diffs | Verified | **PASS** |
+| **Gate 3: Release Reproducibility** | Release candidate images (`v0.1.0-rc3`) built from clean Git archive `9a40495`; zero writable layer diffs | Verified | **PASS** |
 | **Gate 4: Container Security** | Network segmentation (`frontend`/`internal`), `WORKER_INTERNAL_SECRET` token authentication, malformed JSON 400 rejection, zero leak sanitization, API/Web zero NAS mounts, Worker unprivileged UID 1000 | Verified | **PASS** |
 | **Gate 5: Diagnostic Correctness** | Distinct error codes for malformed archive, stream truncation, and NAS I/O outage empirically verified | Verified | **PASS** |
 | **Gate 6: Transport Security** | Production HTTPS reverse proxy and secure cookie configuration documented | Awaiting Infra | **INPUT REQUIRED** |
@@ -398,7 +424,7 @@ The following production infrastructure parameters are **unconfirmed** and must 
 All code, security, container topology, reproducible build, and quality blockers have been **100% resolved**. Production deployment is pending only these operational prerequisites:
 
 1. **[PREREQUISITE 1] Obtain Production Synology NAS Parameters**:
-   Obtain dedicated physical Synology NAS IP, NFS export path, and UID 1000 squashing confirmation from the infrastructure team.
+   Obtain dedicated physical Synology NAS IP (`<PROD_NAS_IP>`), NFS export path (`<PROD_NAS_EXPORT>`), and UID 1000 squashing confirmation from the infrastructure team.
 2. **[PREREQUISITE 2] Schedule Maintenance Window**:
    Schedule an authorized maintenance window to execute `docs/ZCC-PRODUCTION-ROLLOUT-RUNBOOK.md` onto ZimaOS (`10.10.0.28`).
 3. **[PREREQUISITE 3] TLS / Reverse Proxy Provisioning**:
@@ -416,7 +442,7 @@ All code, security, container topology, reproducible build, and quality blockers
 
 ---
 
-## 16. Phase 9.1, 9.1.1, 9.1.2 & 9.1.3 Readiness Gap Closure Audit & Resolution Log
+## 16. Phase 9.1 through 9.1.4 Readiness Gap Closure Audit & Resolution Log
 
 | Blocker ID | Description | Resolution Summary | Verification Method |
 | :--- | :--- | :--- | :--- |
@@ -429,3 +455,4 @@ All code, security, container topology, reproducible build, and quality blockers
 | **BLK-07** | **Internal Network Hardening & Authentication** | Implemented dual Docker networks (`frontend`/`internal`) in `compose.yaml` and constant-time token verification (`WORKER_INTERNAL_SECRET`) on `WorkerInternalServer`. | 9 empirical security tests on staging (authorized call, web blocked, peer blocked, 401 rejected, 400 rejected, 404 rejected). |
 | **BLK-08** | **Malformed JSON & Internal Error Sanitization** | Worker internal server intercepts JSON parse syntax errors and invalid body schemas, returning HTTP 400 Bad Request with generic error message. Sanitizes all responses to prevent leaking stack traces, parser exception details, tokens, or paths. | 7 unit regression tests in worker test suite (`npm --workspace=@zima-control-center/worker test`); empirical security test on staging. |
 | **BLK-09** | **Secret Hygiene & Fail-Safe Configuration** | Audited `WORKER_INTERNAL_SECRET` across all code, compose files, and scripts. Enforced fail-closed behavior if required secret is missing. Rotated staging secret with 256-bit random token without printing/logging values in output or reports. | Code audit; runtime validation; empirical staging test suite. |
+| **BLK-10** | **Release Artifact Identity & Tag Collision Resolution** | Retired ambiguous `v0.1.0-rc2` tag. Assigned immutable identifier `v0.1.0-rc3`. Pinned `compose.yaml` to `:v0.1.0-rc3`. Rebuilt clean container images from frozen archive `release-9a40495.tar.gz` (SHA-256 `582a7e78f49eacbc15373438b76c7f92832d5a17f265be42bb7c916b43a41767`). Audited container digests and verified zero `/app` diffs in writable layers. | `docker inspect` (exact image IDs), `docker diff` (clean layers), and E2E acceptance job `eca35611`. |

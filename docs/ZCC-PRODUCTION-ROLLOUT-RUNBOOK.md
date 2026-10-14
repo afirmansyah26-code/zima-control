@@ -1,11 +1,11 @@
-# ZCC — Production Rollout & Rollback Runbook (Phase 9.1.3)
+# ZCC — Production Rollout & Rollback Runbook (Phase 9.1.4)
 
 | Metadata | Value |
 | :--- | :--- |
 | **Document** | Production Deployment & Rollback Runbook |
-| **Phase** | Phase 9.1.3 — Final Security Closure & Release Gate |
+| **Phase** | Phase 9.1.4 — Release Artifact Freeze & Documentation Correction |
 | **Target Host (Reference Only)** | ZimaOS `10.10.0.28` (`ZimaCube`, Linux Kernel `6.18.9 x86_64`) |
-| **Release Baseline Commit** | `51caacab0cc67dac809a180851aa4e16459a5d76` |
+| **Release Baseline Commit** | `9a404956b31ce8274db8de7bac1626258f40c284` |
 | **Prerequisite Audit** | `docs/ZCC-PRODUCTION-READINESS-AUDIT.md` |
 | **Destination Technical Design** | `docs/ZCC-SYNOLOGY-DESTINATION-DESIGN.md` |
 | **Authoritative Architecture** | `docs/ZCC-PRODUCT-ARCHITECTURE-AND-SCOPE.md` |
@@ -13,7 +13,7 @@
 
 > [!WARNING]
 > **OPERATIONAL NOTICE**:
-> This runbook is a **planned operational specification**. In accordance with Phase 9.1.3 constraints, **NO COMMANDS in this runbook were executed against production (`10.10.0.28`)**.
+> This runbook is a **planned operational specification**. In accordance with Phase 9.1.4 constraints, **NO COMMANDS in this runbook were executed against production (`10.10.0.28`)**.
 > Execution of this runbook requires formal resolution of all audit blockers and a signed GO decision.
 
 ---
@@ -34,10 +34,10 @@
 Before executing the rollout, the deployment team must confirm the following values:
 
 ```bash
-# Production Parameters (To be filled by Infrastructure Owner)
-PROD_ZIMAOS_IP="10.10.0.28"
-PROD_NAS_IP="<PROD_SYNOLOGY_IP>"                     # e.g. 10.10.0.100
-PROD_NAS_EXPORT="<PROD_SYNOLOGY_EXPORT_PATH>"         # e.g. /volume1/zcc-backups
+# Production Parameters (To be supplied by Infrastructure Owner during maintenance window)
+PROD_ZIMAOS_IP="10.10.0.28"                          # Confirmed ZimaOS production host IP
+PROD_NAS_IP="<PROD_NAS_IP>"                           # INPUT REQUIRED: Physical Synology NAS IP
+PROD_NAS_EXPORT="<PROD_NAS_EXPORT>"                   # INPUT REQUIRED: Synology volume export path
 PROD_DEST_ID="synology-production-nas"
 PROD_HOST_MOUNT="/DATA/.zcc-nas/${PROD_DEST_ID}"
 PROD_CONTAINER_MOUNT="/zcc-destinations/${PROD_DEST_ID}"
@@ -56,10 +56,10 @@ PROD_WORKER_INTERNAL_SECRET="<GENERATE_SECURE_RANDOM_SECRET>"
 - **Action**: Verify local repository is checked out at the approved release commit and working tree is clean.
 - **Runbook Command**:
   ```bash
-  git checkout 51caacab0cc67dac809a180851aa4e16459a5d76
+  git checkout 9a404956b31ce8274db8de7bac1626258f40c284
   git status
   ```
-- **Expected Result**: `HEAD detached at 51caaca`, `nothing to commit, working tree clean`.
+- **Expected Result**: `HEAD detached at 9a40495`, `nothing to commit, working tree clean`.
 - **Failure Condition**: Uncommitted changes or different commit SHA.
 - **Rollback Action**: Abort rollout. Run `git reset --hard` or re-checkout approved commit.
 
@@ -69,9 +69,9 @@ PROD_WORKER_INTERNAL_SECRET="<GENERATE_SECURE_RANDOM_SECRET>"
 - **Action**: Build release container images using repository Dockerfiles.
 - **Runbook Command**:
   ```bash
-  docker build -f Dockerfile.api -t zima-control-center/api:v0.1.0-rc2 -t zima-control-center/api:latest .
-  docker build -f Dockerfile.worker -t zima-control-center/worker:v0.1.0-rc2 -t zima-control-center/worker:latest .
-  docker build -f Dockerfile.web -t zima-control-center/web:v0.1.0-rc2 -t zima-control-center/web:latest .
+  docker build -f Dockerfile.api -t zima-control-center/api:v0.1.0-rc3 -t zima-control-center/api:latest .
+  docker build -f Dockerfile.worker -t zima-control-center/worker:v0.1.0-rc3 -t zima-control-center/worker:latest .
+  docker build -f Dockerfile.web -t zima-control-center/web:v0.1.0-rc3 -t zima-control-center/web:latest .
   ```
 - **Expected Result**: Zero build errors; 3 distinct image IDs generated.
 - **Failure Condition**: `tsc`, `npm ci`, or `prisma generate` fails during build.
@@ -83,9 +83,9 @@ PROD_WORKER_INTERNAL_SECRET="<GENERATE_SECURE_RANDOM_SECRET>"
 - **Action**: Record and audit SHA-256 digests of built images.
 - **Runbook Command**:
   ```bash
-  docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/api:v0.1.0-rc2
-  docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/worker:v0.1.0-rc2
-  docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/web:v0.1.0-rc2
+  docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/api:v0.1.0-rc3
+  docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/worker:v0.1.0-rc3
+  docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/web:v0.1.0-rc3
   ```
 - **Expected Result**: Image digests match build manifest; zero runtime diffs:
   - `zcc-api`: `sha256:d9b9d2afc7764e43220ae29594c89d22ceee95635a3575ccce28fc54440eb914`
@@ -102,7 +102,7 @@ PROD_WORKER_INTERNAL_SECRET="<GENERATE_SECURE_RANDOM_SECRET>"
   ```yaml
   services:
     api:
-      image: zima-control-center/api:v0.1.0-rc2
+      image: zima-control-center/api:v0.1.0-rc3
       container_name: zcc-api
       environment:
         DATABASE_URL: file:/data/registry.db
@@ -123,7 +123,7 @@ PROD_WORKER_INTERNAL_SECRET="<GENERATE_SECURE_RANDOM_SECRET>"
       restart: unless-stopped
 
     web:
-      image: zima-control-center/web:v0.1.0-rc2
+      image: zima-control-center/web:v0.1.0-rc3
       container_name: zcc-web
       ports:
         - "8080:8080"
@@ -135,7 +135,7 @@ PROD_WORKER_INTERNAL_SECRET="<GENERATE_SECURE_RANDOM_SECRET>"
       restart: unless-stopped
 
     worker:
-      image: zima-control-center/worker:v0.1.0-rc2
+      image: zima-control-center/worker:v0.1.0-rc3
       container_name: zcc-worker
       environment:
         DATABASE_URL: file:/data/registry.db
@@ -403,7 +403,7 @@ PROD_WORKER_INTERNAL_SECRET="<GENERATE_SECURE_RANDOM_SECRET>"
 - **Action**: Record deployment metadata and freeze baseline state.
 - **Runbook Command**:
   ```bash
-  echo "DEPLOYED: $(date -u --iso-8601=seconds) COMMIT: 51caaca" >> /DATA/AppData/zima-control-center/deployment.log
+  echo "DEPLOYED: $(date -u --iso-8601=seconds) COMMIT: 9a40495" >> /DATA/AppData/zima-control-center/deployment.log
   ```
 - **Expected Result**: Checkpoint committed. Operational handover complete.
 
