@@ -1,10 +1,10 @@
-# ZCC — Production Rollout & Rollback Runbook (Phase 9)
+# ZCC — Production Rollout & Rollback Runbook (Phase 9.1.1)
 
 | Metadata | Value |
 | :--- | :--- |
 | **Document** | Production Deployment & Rollback Runbook |
 | **Target Host (Reference Only)** | ZimaOS `10.10.0.28` (`ZimaCube`, Linux Kernel `6.18.9 x86_64`) |
-| **Release Baseline Commit** | `16c2b46f3c2fe378f10c9cbf6bcfd1503121154f` |
+| **Release Baseline Commit** | `b8146ef60d93f71abad49fd9a5ebfd910456924f` |
 | **Prerequisite Audit** | `docs/ZCC-PRODUCTION-READINESS-AUDIT.md` |
 | **Destination Technical Design** | `docs/ZCC-SYNOLOGY-DESTINATION-DESIGN.md` |
 | **Authoritative Architecture** | `docs/ZCC-PRODUCT-ARCHITECTURE-AND-SCOPE.md` |
@@ -12,7 +12,7 @@
 
 > [!WARNING]
 > **OPERATIONAL NOTICE**:
-> This runbook is a **planned operational specification**. In accordance with Phase 9 constraints, **NO COMMANDS in this runbook were executed against production (`10.10.0.28`)**.
+> This runbook is a **planned operational specification**. In accordance with Phase 9.1.1 constraints, **NO COMMANDS in this runbook were executed against production (`10.10.0.28`)**.
 > Execution of this runbook requires formal resolution of all audit blockers and a signed GO decision.
 
 ---
@@ -53,10 +53,10 @@ PROD_ADMIN_PASS="<GENERATE_SECURE_RANDOM_PASSWORD>"
 - **Action**: Verify local repository is checked out at the approved release commit and working tree is clean.
 - **Runbook Command**:
   ```bash
-  git checkout 16c2b46f3c2fe378f10c9cbf6bcfd1503121154f
+  git checkout b8146ef60d93f71abad49fd9a5ebfd910456924f
   git status
   ```
-- **Expected Result**: `HEAD detached at 16c2b46`, `nothing to commit, working tree clean`.
+- **Expected Result**: `HEAD detached at b8146ef`, `nothing to commit, working tree clean`.
 - **Failure Condition**: Uncommitted changes or different commit SHA.
 - **Rollback Action**: Abort rollout. Run `git reset --hard` or re-checkout approved commit.
 
@@ -66,9 +66,9 @@ PROD_ADMIN_PASS="<GENERATE_SECURE_RANDOM_PASSWORD>"
 - **Action**: Build release container images using repository Dockerfiles.
 - **Runbook Command**:
   ```bash
-  docker build -f Dockerfile.api -t zima-control-center/api:v0.1.0-rc1 .
-  docker build -f Dockerfile.worker -t zima-control-center/worker:v0.1.0-rc1 .
-  docker build -f Dockerfile.web -t zima-control-center/web:v0.1.0-rc1 .
+  docker build -f Dockerfile.api -t zima-control-center/api:v0.1.0-rc1 -t zima-control-center/api:latest .
+  docker build -f Dockerfile.worker -t zima-control-center/worker:v0.1.0-rc1 -t zima-control-center/worker:latest .
+  docker build -f Dockerfile.web -t zima-control-center/web:v0.1.0-rc1 -t zima-control-center/web:latest .
   ```
 - **Expected Result**: Zero build errors; 3 distinct image IDs generated.
 - **Failure Condition**: `tsc`, `npm ci`, or `prisma generate` fails during build.
@@ -84,7 +84,10 @@ PROD_ADMIN_PASS="<GENERATE_SECURE_RANDOM_PASSWORD>"
   docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/worker:v0.1.0-rc1
   docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/web:v0.1.0-rc1
   ```
-- **Expected Result**: Image digests match build manifest; zero runtime diffs.
+- **Expected Result**: Image digests match build manifest; zero runtime diffs:
+  - `zcc-api`: `sha256:d23befbbfb7c58e658679f9d7b29fbd2d8fea455c984bb4ea4089ac439546bfa`
+  - `zcc-worker`: `sha256:b6371201ba1a0a41df9cbd94e70384d940350ce8507b876f3305234a45df030e`
+  - `zcc-web`: `sha256:246938d1e64e41637f520e0ab24c423c6d161ec73495099739ae50c0c775c6cd`
 - **Failure Condition**: Images corrupted or missing expected tags.
 - **Rollback Action**: Delete faulty images with `docker rmi`; rebuild from scratch.
 
@@ -106,6 +109,7 @@ PROD_ADMIN_PASS="<GENERATE_SECURE_RANDOM_PASSWORD>"
         MUTATION_CAPABILITY_MODE: DISABLED
         TRUST_FORWARDED_PROTO: "true"
         AUTH_COOKIE_SECURE: "true" # Set to true when behind TLS reverse proxy
+        WORKER_INTERNAL_URL: http://worker:3001
       volumes:
         - registry-data:/data
         - /run/zcc/application-runtime.sock:/run/zcc/application-runtime.sock
@@ -128,6 +132,7 @@ PROD_ADMIN_PASS="<GENERATE_SECURE_RANDOM_PASSWORD>"
         DATABASE_URL: file:/data/registry.db
         ZIMAOS_BASE_URL: http://127.0.0.1
         OBSERVATION_INTERVAL_MS: 30000
+        WORKER_INTERNAL_PORT: 3001
         NODE_ENV: production
       volumes:
         - registry-data:/data
@@ -380,7 +385,7 @@ PROD_ADMIN_PASS="<GENERATE_SECURE_RANDOM_PASSWORD>"
 - **Action**: Record deployment metadata and freeze baseline state.
 - **Runbook Command**:
   ```bash
-  echo "DEPLOYED: $(date -u --iso-8601=seconds) COMMIT: 16c2b46" >> /DATA/AppData/zima-control-center/deployment.log
+  echo "DEPLOYED: $(date -u --iso-8601=seconds) COMMIT: b8146ef" >> /DATA/AppData/zima-control-center/deployment.log
   ```
 - **Expected Result**: Checkpoint committed. Operational handover complete.
 
