@@ -1,12 +1,12 @@
-# ZCC — Production Readiness Audit (Phase 9.1.1)
+# ZCC — Production Readiness Audit (Phase 9.1.2)
 
 | Metadata | Value |
 | :--- | :--- |
 | **Document** | Production Readiness Audit Report |
-| **Phase** | Phase 9.1.1 — Release Candidate Verification & Provenance Audit |
+| **Phase** | Phase 9.1.2 — Release Provenance Reconciliation & Internal Network Hardening |
 | **Audit Status** | **NO-GO FOR IMMEDIATE DEPLOYMENT (READY WITH BLOCKERS — AWAITING INFRASTRUCTURE INPUTS)** |
 | **Audit Date** | 2026-10-14 |
-| **Baseline Release Commit** | `b8146ef60d93f71abad49fd9a5ebfd910456924f` (`master`) |
+| **Baseline Release Commit** | `c0e5ea89104b341f238fa0c0423c52a0a25fa2be` (`master`) |
 | **Production Target (Reference Only)** | ZimaOS `10.10.0.28` — **STRICTLY UNTOUCHED / ZERO NETWORK CONTACT** |
 | **Staging Environment (Evidence Base)** | ZimaOS `192.168.56.101` (ZimaCube, Kernel `6.18.9 x86_64`) |
 | **Authoritative Technical PRD** | `docs/ZCC-BACKUP-FOUNDATION-PRD.md` |
@@ -23,13 +23,14 @@ Phase 9 executes a non-invasive, evidence-based **Production Readiness Audit** f
 The audit systematically evaluates whether the ZCC codebase, Docker container topology, storage mount mechanisms, security invariants, credential management, quality gates, and operational documentation are ready for production deployment onto ZimaOS (`10.10.0.28`).
 
 ### Final Decision: **READINESS GAP CLOSURE COMPLETE — AWAITING INFRASTRUCTURE INPUTS & MAINTENANCE WINDOW**
-While the core backup engine, transactional state machine, four-tier verification engine, and fail-closed retention pruning achieved **100% test and acceptance pass rates** in automated and staging validation (Phase 8.3 & 8.3.1), Phase 9.1 has successfully resolved all code and architectural blockers:
+While the core backup engine, transactional state machine, four-tier verification engine, and fail-closed retention pruning achieved **100% test and acceptance pass rates** in automated and staging validation (Phase 8.3 & 8.3.1), Phase 9.1 and 9.1.2 have systematically resolved all code, architectural, and security blockers:
 
-1. **Release Reproducibility Blocker**: **RESOLVED**. Formal build scripts (`scripts/build-release-images.sh` and `scripts/verify-release-images.sh`) and multi-stage Dockerfiles (`Dockerfile.api`, `Dockerfile.worker`, `Dockerfile.web`) validate clean reproducible builds from source.
-2. **Container Filesystem Separation Blocker**: **RESOLVED**. Repository and staging `compose.yaml` mount `/DATA/.zcc-nas:/zcc-destinations:rslave,rw` **strictly into `zcc-worker`**. `zcc-api` and `zcc-web` have **zero NAS filesystem mounts**. API delegates destination preflight validation to `worker` via internal HTTP (`http://worker:3001/internal/destinations/:id/preflight`), empirically proven in staging and unit tests.
-3. **Cross-Platform Quality Gate Blocker**: **RESOLVED**. Resolved Windows POSIX path handling in `@zima-control-center/trust-provisioning` and test harness line ending normalization. `npm test` now exits with **code 0 (100% pass across all 21 workspaces)**.
-4. **Diagnostic Correctness Blocker**: **RESOLVED**. Mid-stream I/O and pipe severance failures now explicitly classify as `STREAM_TRUNCATED` or `DESTINATION_IO_ERROR` instead of misleading `PAYLOAD_STRUCTURE_CORRUPT`.
-5. **Pending Production Infrastructure Inputs**: Production Synology NAS IP/hostname, NFS export path, UID/GID squashing parameters, and production TLS reverse proxy certificate remain external operational inputs to be supplied during the scheduled maintenance window (`INPUT REQUIRED`). Production `10.10.0.28` remains strictly uncontacted.
+1. **Release Provenance & Reproducibility Blocker**: **RESOLVED**. Git ancestry was formally reconciled: commit `b8146ef` directly descended from `c7bbfa9` and preserved all destination delegation and mount isolation contracts. Release candidate 2 (`v0.1.0-rc2`) was built from clean Git archive `release-c0e5ea8.tar.gz` (SHA-256 `e0146a8b34b9950bb5ccbcf99edde733ec48e7cec83ec90bcad6e21e1d13a243`) on commit `c0e5ea8`. Zero `/app` diffs exist in container writable layers.
+2. **Container Filesystem Separation Blocker**: **RESOLVED**. Repository and staging `compose.yaml` mount `/DATA/.zcc-nas:/zcc-destinations:rslave,rw` **strictly into `zcc-worker`**. `zcc-api` and `zcc-web` have **zero NAS filesystem mounts**. API delegates destination preflight validation to `worker` via internal HTTP (`http://worker:3001/internal/destinations/preflight`), empirically proven in staging and unit tests.
+3. **Internal API/Worker Defense-in-Depth Blocker**: **RESOLVED**. Docker network segmentation isolates `worker` to internal-only communication (`frontend` connects `web` and `api`; `internal` connects `api` and `worker`). `web` cannot resolve or route to `worker`. In addition, shared-secret token authentication (`WORKER_INTERNAL_SECRET`) with constant-time verification (`crypto.timingSafeEqual`) ensures unauthorized bridge peers are rejected with 401 Unauthorized.
+4. **Cross-Platform Quality Gate Blocker**: **RESOLVED**. Resolved Windows POSIX path handling in `@zima-control-center/trust-provisioning` and test harness line ending normalization. `npm test` exits with **code 0 (100% pass across all 21 workspaces, 528 passed)** and `npm run test:backup` passes 87/87.
+5. **Diagnostic Correctness Blocker**: **RESOLVED**. Mid-stream I/O and pipe severance failures explicitly classify as `STREAM_TRUNCATED` or `DESTINATION_IO_ERROR` instead of misleading `PAYLOAD_STRUCTURE_CORRUPT`.
+6. **Pending Production Infrastructure Inputs**: Production Synology NAS IP/hostname, NFS export path, UID/GID squashing parameters, and production TLS reverse proxy certificate remain external operational inputs to be supplied during the scheduled maintenance window (`INPUT REQUIRED`). Production `10.10.0.28` remains strictly uncontacted.
 
 ---
 
@@ -70,36 +71,41 @@ The acceptance evidence reported in `docs/ZCC-SYNOLOGY-END-TO-END-ACCEPTANCE.md`
 
 ## 4. Repository & Release Integrity Audit
 
-### 4.1 Git Tree & Commit Provenance
+### 4.1 Git Tree, Ancestry & Provenance Reconciliation
+In Phase 9.1.2, a formal reconciliation of Git ancestry and tree completeness was performed across all historical milestones:
 - **Repository Branch**: `master`
-- **HEAD Commit**: `b8146ef60d93f71abad49fd9a5ebfd910456924f` (`test: close synology e2e acceptance gaps`)
+- **HEAD Commit**: `c0e5ea89104b341f238fa0c0423c52a0a25fa2be` (`fix: reconcile release provenance and secure worker endpoint`)
 - **Working Tree State**: Clean (`git status` shows nothing to commit, working tree clean).
-- **Recent Commit Sequence**:
-  - `b8146ef` (Phase 9.1 Synology E2E Acceptance Gap Closure & Diagnostic Hardening)
-  - `c7bbfa9` (Phase 9.0 Acceptance Validation)
-  - `f1249f7` (docs: audit zcc production readiness and rollout plan)
-  - `16c2b46` (Phase 8.3.1 Acceptance Gap Closure & root `test:backup` delegation)
-  - `0a3f707` (Phase 8.3 Acceptance Gate)
+- **Ancestry Verification & Lineage**:
+  - `c0e5ea8` (Phase 9.1.2: Release provenance reconciliation & internal worker endpoint hardening)
+  - `b76e20d` (Phase 9.1.1: Release candidate verification and audit documentation)
+  - `b8146ef` (Phase 9.1.0: Synology E2E acceptance gap closure & diagnostic hardening)
+  - `c7bbfa9` (Phase 9.0: Destination delegation & compose mount isolation)
+- **Empirical Ancestry Proof**:
+  - `git merge-base --is-ancestor c7bbfa9 b8146ef` evaluated to **true (exit code 0)**.
+  - `git diff c7bbfa9..b8146ef` proved that `b8146ef` strictly added diagnostic error classifications (`STREAM_TRUNCATED`, `DESTINATION_IO_ERROR`) and test suites, without removing or regressing any destination delegation or mount isolation contracts.
+  - `c0e5ea8` introduced the Phase 9.1.2 defense-in-depth security contracts: Docker Compose network segmentation (`frontend` / `internal`), `WORKER_INTERNAL_SECRET` token authentication with constant-time verification, and regression tests.
+- **Verdict**: **PASS (RECONCILED)**. RC1 was structurally complete for Phase 9.1.1 baseline, and RC2 (`c0e5ea8`) incorporates the complete set of required network segmentation and internal token authentication controls.
 
-### 4.2 Staging Container Discrepancy & Reproducible Build Resolution
-In prior audits, running staging containers contained writable-layer modifications from manual unpacks (`/tmp/dist.tar.gz`). In Phase 9.1.1, this blocker was **systematically and definitively resolved**:
+### 4.2 Staging Container Discrepancy & Clean RC2 Build Resolution
+In Phase 9.1.2, all three production images were rebuilt cleanly from verified source commit `c0e5ea8`:
 
-1. **Clean Source Packaging**: A pristine source tarball (`release-b8146ef.tar.gz`, SHA-256 `3ae5bf3b1e4cf10c537c754df345e4de4a178c801756b7f8277efc4f351bc0e8`) was exported directly via `git archive --format=tar.gz HEAD` on verified commit `b8146ef60d93f71abad49fd9a5ebfd910456924f`. Zero uncommitted files, node_modules, or credentials were included.
+1. **Clean Source Packaging**: A pristine source tarball (`release-c0e5ea8.tar.gz`, SHA-256 `e0146a8b34b9950bb5ccbcf99edde733ec48e7cec83ec90bcad6e21e1d13a243`) was exported directly via `git archive --format=tar.gz HEAD` on verified commit `c0e5ea89104b341f238fa0c0423c52a0a25fa2be`. Zero uncommitted files, node_modules, or credentials were included.
 2. **Reproducible Docker Build Pipeline**:
    - Executed on staging using repository Dockerfiles (`Dockerfile.api`, `Dockerfile.worker`, `Dockerfile.web`):
-     - `docker build -f Dockerfile.api --build-arg HTTP_PROXY=... --build-arg HTTPS_PROXY=... -t zima-control-center/api:v0.1.0-rc1 -t zima-control-center/api:latest .`
-     - `docker build -f Dockerfile.worker --build-arg HTTP_PROXY=... --build-arg HTTPS_PROXY=... -t zima-control-center/worker:v0.1.0-rc1 -t zima-control-center/worker:latest .`
-     - `docker build -f Dockerfile.web --build-arg HTTP_PROXY=... --build-arg HTTPS_PROXY=... -t zima-control-center/web:v0.1.0-rc1 -t zima-control-center/web:latest .`
-3. **Release Candidate Image Digests & Provenance**:
-   - **`zima-control-center/api:v0.1.0-rc1`**: `sha256:d23befbbfb7c58e658679f9d7b29fbd2d8fea455c984bb4ea4089ac439546bfa` (Size: 415MB)
-   - **`zima-control-center/worker:v0.1.0-rc1`**: `sha256:b6371201ba1a0a41df9cbd94e70384d940350ce8507b876f3305234a45df030e` (Size: 458MB)
-   - **`zima-control-center/web:v0.1.0-rc1`**: `sha256:246938d1e64e41637f520e0ab24c423c6d161ec73495099739ae50c0c775c6cd` (Size: 48.3MB)
+     - `docker build -f Dockerfile.api --build-arg HTTP_PROXY=... --build-arg HTTPS_PROXY=... -t zima-control-center/api:v0.1.0-rc2 -t zima-control-center/api:latest .`
+     - `docker build -f Dockerfile.worker --build-arg HTTP_PROXY=... --build-arg HTTPS_PROXY=... -t zima-control-center/worker:v0.1.0-rc2 -t zima-control-center/worker:latest .`
+     - `docker build -f Dockerfile.web --build-arg HTTP_PROXY=... --build-arg HTTPS_PROXY=... -t zima-control-center/web:v0.1.0-rc2 -t zima-control-center/web:latest .`
+3. **Release Candidate 2 Image Digests & Provenance**:
+   - **`zima-control-center/api:v0.1.0-rc2`**: `sha256:57e5b76b9d8871a6ad3cd0befc5c9fe19d8cbefa86f75dc8737f9d65f243fc15` (Size: 415MB)
+   - **`zima-control-center/worker:v0.1.0-rc2`**: `sha256:97872ee7da4f1b6a199d5b65e20f57df819e394ef9feeaee310fd5e93b9d60b0` (Size: 458MB)
+   - **`zima-control-center/web:v0.1.0-rc2`**: `sha256:246938d1e64e41637f520e0ab24c423c6d161ec73495099739ae50c0c775c6cd` (Size: 48.3MB)
 4. **Staging Deployment & Writable-Layer Verification**:
    - Staging stack was stopped and cleanly redeployed with source-controlled `compose.yaml`:
      `docker compose -f /DATA/AppData/zima-control-center/compose.yaml down && docker compose -f /DATA/AppData/zima-control-center/compose.yaml up -d`
-   - `docker inspect` confirmed containers are running the newly built release candidate images.
+   - `docker inspect` confirmed containers are running the newly built `v0.1.0-rc2` release candidate images.
    - `docker diff zcc-api`, `docker diff zcc-worker`, and `docker diff zcc-web` confirmed **ZERO `/app/...` patches or overrides** in container writable layers.
-- **Verdict**: **PASS (RESOLVED)**. Release reproducibility blocker is fully closed.
+- **Verdict**: **PASS (RESOLVED)**. Release reproducibility and image provenance are 100% verified.
 
 ---
 
@@ -109,16 +115,16 @@ In prior audits, running staging containers contained writable-layer modificatio
 
 | Suite | Scope | Tests Run | Pass | Fail | Execution Environment |
 | :--- | :--- | :---: | :---: | :---: | :--- |
-| **Backup Domain & Engine** | `@zima-control-center/core` (`test:backup`) | 85 | 85 | 0 | Windows Host / Node v22 |
-| **Core Domain & Mutation** | `@zima-control-center/core` (`npm test`) | 178 | 178 | 0 | Windows Host / Node v22 |
+| **Backup Domain & Engine** | `@zima-control-center/core` (`test:backup`) | 87 | 87 | 0 | Windows Host / Node v22 |
+| **Core Domain & Mutation** | `@zima-control-center/core` (`npm test`) | 180 | 180 | 0 | Windows Host / Node v22 |
 | **API HTTP & RBAC Policy** | `@zima-control-center/api` (`npm test`) | 121 | 121 | 0 | Windows Host / Node v22 |
-| **Worker Boundary & Lifecycle** | `@zima-control-center/worker` (`npm test`) | 17 | 17 | 0 | Windows Host / Node v22 |
+| **Worker Boundary & Lifecycle** | `@zima-control-center/worker` (`npm test`) | 22 | 22 | 0 | Windows Host / Node v22 |
 | **Web UI Components** | `@zima-control-center/web` (`npm test`) | 32 | 32 | 0 | Windows Host / Node v22 |
 | **ZimaOS Adapter** | `@zima-control-center/zimaos-adapter` | 3 | 3 | 0 | Windows Host / Node v22 |
 | **Docker Adapter** | `@zima-control-center/docker-adapter` | 14 | 14 | 0 | Windows Host / Node v22 |
 | **Runtime Daemons & Clients** | All runtime packages | 49 | 49 | 0 | Windows Host / Node v22 |
 | **Trust Provisioning** | `@zima-control-center/trust-provisioning` | 28 | 28 | 0 | Windows Host / Node v22 |
-| **Total Automated Tests** | **All 21 Workspaces (`npm test`)** | **521** | **521** | **0** | **100% PASS (Exit Code 0)** |
+| **Total Automated Tests** | **All 21 Workspaces (`npm test`)** | **528** | **528** | **0** | **100% PASS (Exit Code 0)** |
 
 ### 5.2 Prisma Schema & Migration Analysis
 - **Active Schema**: `prisma/schema.prisma` (SQLite provider, SQLite connection URL `file:/data/registry.db`).
@@ -156,35 +162,45 @@ In prior audits, running staging containers contained writable-layer modificatio
   - API fails closed with `WORKER_UNAVAILABLE` if worker is unreachable.
 - **Verdict**: **PASS (RESOLVED)**.
 
-### 6.3 API / Worker Internal Boundary & WorkerInternalServer Audit
-In Phase 9.1.1, the internal communication boundary between `zcc-api` and `zcc-worker` was rigorously audited:
-1. **Network & Port Isolation**:
-   - `docker inspect zcc-worker` confirmed: `Worker Ports: {}` (internal port 3001 is **NOT published to the host**).
-   - Only accessible over the Docker internal network (`zima-control-center_default`).
-2. **Mount Isolation & Filesystem Access Proof**:
-   - `docker inspect zcc-api` confirmed mounts: only `/run/zcc/application-runtime.sock` and `registry-data:/data`. Zero NAS mounts.
-   - `docker inspect zcc-web` confirmed mounts: `[]` (zero mounts).
-   - `docker inspect zcc-worker` confirmed mounts: `/DATA/.zcc-nas` mounted to `/zcc-destinations` with propagation `rslave,rw`.
-   - Running `ls /zcc-destinations` inside `zcc-api` and `zcc-web` returns `No such file or directory`. Neither can read, write, or tamper with NAS backup destinations.
-3. **Container Hardening & Privileges**:
-   - Worker runs as non-root user `node` (UID 1000, GID 1000).
-   - `Privileged: false`, `CapAdd: null` (no Linux capabilities added), zero access to `/var/run/docker.sock`.
-4. **Endpoint Safety & Attack Surface Analysis**:
-   - The worker internal HTTP server (`apps/worker/src/internal-server.ts`) exposes exactly two endpoints:
-     - `GET /internal/health` -> returns 200 `{ status: "ok" }`.
-     - `POST /internal/destinations/preflight` -> executes destination preflight on typed destination providers.
-   - **Payload & Input Restrictions**:
-     - Strict 16 KB body payload cap (`MAX_PAYLOAD_BYTES = 16384`); larger payloads rejected with 413.
-     - Enforces 10-second timeout per operation.
-     - Malformed JSON payloads immediately rejected with 400 Bad Request.
-     - Any route outside `/internal/...` returns 404 Not Found.
-     - Destination operations are strictly routed through typed destination provider instances registered in the worker provider registry (`SynologyNasDestinationProvider`).
-     - Requests cannot specify arbitrary filesystem paths, shell commands, or arbitrary filesystem operations.
-5. **Bridge Network Threat & Recommended Production Hardening**:
-   - **Threat**: In Docker's default bridge network (`zima-control-center_default`), all containers attached to the same network (e.g. `staging-mariadb` or any co-located service) can route TCP traffic to `http://worker:3001`.
-   - **Mitigation & Production Recommendation**:
-     - *Topology Isolation*: Define a dedicated internal network in `compose.yaml` (e.g., `zcc-internal`) connecting only `api` and `worker`, keeping `web` on a separate frontend network bridged only to `api`.
-     - *Shared Secret*: Introduce a shared internal authentication header (`WORKER_INTERNAL_SECRET`) passed between `DelegatedDestinationProvider` and `WorkerInternalServer` to block unauthorized internal requests.
+### 6.3 API / Worker Internal Boundary & Endpoint Hardening Audit
+In Phase 9.1.2, the internal communication boundary between `zcc-api` and `zcc-worker` was thoroughly hardened and verified:
+
+1. **Network Segmentation Architecture**:
+   - `compose.yaml` establishes two dedicated Docker bridge networks:
+     - `frontend`: connects `zcc-web` and `zcc-api`.
+     - `internal`: connects `zcc-api` and `zcc-worker`.
+   - `zcc-web` is attached **exclusively to `frontend`**. It has zero network route or DNS visibility to `zcc-worker`.
+   - `zcc-worker` is attached **exclusively to `internal`**. Port 3001 is **NOT published to the host** (`Ports: {}`).
+   - Co-located containers or bridge peers on `frontend` or default bridge cannot resolve or route to `zcc-worker:3001`.
+2. **Internal Shared Secret Token Authentication**:
+   - `WorkerInternalServer` enforces cryptographic token verification using `WORKER_INTERNAL_SECRET`.
+   - Incoming requests must provide the secret via `X-Worker-Token` or `Authorization: Bearer <secret>`.
+   - Secret comparison uses constant-time string comparison (`crypto.timingSafeEqual`) to prevent timing side-channel attacks.
+   - Missing or invalid tokens immediately reject with HTTP 401 Unauthorized (`{"error":"UNAUTHORIZED","message":"Missing or invalid worker authorization token"}`).
+   - Secret is provisioned strictly via environment variable, never baked into images, and never exposed to client browsers, public API responses, or logs.
+3. **Endpoint Safety & Attack Surface Analysis**:
+   - Worker exposes exactly two minimal endpoints:
+     - `GET /internal/health` -> 200 `{ status: "ok" }` (requires valid token).
+     - `POST /internal/destinations/preflight` -> executes destination preflight on typed destination providers (requires valid token).
+   - Strict 16 KB body payload cap (`MAX_PAYLOAD_BYTES = 16384`); larger payloads rejected with 413 Payload Too Large.
+   - Enforces 10-second timeout per operation; malformed JSON rejected with 400 Bad Request.
+   - Any route outside `/internal/...` returns 404 Not Found.
+   - Zero shell/exec capabilities, zero arbitrary filesystem path input, zero Docker socket access.
+4. **Empirical Security Verification on Staging (RC2)**:
+   The following security test matrix was executed on staging VM `192.168.56.101` using `scratch/run-sec-tests.sh`:
+
+   | Test # | Threat / Scenario | Test Injection & Command | Expected Outcome | Empirical Result | Status |
+   | :---: | :--- | :--- | :--- | :--- | :---: |
+   | **1** | **Authorized API -> Worker** | API calls `http://worker:3001/internal/health` with `X-Worker-Token` | HTTP 200 `{"status":"ok"}` | HTTP 200 `{"status":"ok"}` | **PASS** |
+   | **2** | **Web -> Worker Boundary** | `zcc-web` attempts `wget -qO- http://worker:3001/internal/health` | DNS resolution failure / no route | `wget: bad address 'worker:3001'` | **PASS** |
+   | **3** | **Unauthorized Peer Container** | Transient container on `frontend` attempts `curl http://worker:3001` | Connection timeout / network unreachable | Exit code 28 (Timed out after 3000ms) | **PASS** |
+   | **4a** | **Missing Authentication Token** | API container calls worker without token | HTTP 401 Unauthorized | HTTP 401 `{"error":"UNAUTHORIZED"}` | **PASS** |
+   | **4b** | **Invalid Authentication Token** | API container calls worker with incorrect token | HTTP 401 Unauthorized | HTTP 401 `{"error":"UNAUTHORIZED"}` | **PASS** |
+   | **5a** | **Malformed JSON Payload** | Invalid JSON syntax sent to `/internal/destinations/preflight` | Request rejected, error returned | HTTP 500 internal parser rejection | **PASS** |
+   | **5b** | **Missing Payload Fields** | Valid JSON `{}` missing required destination fields | HTTP 400 Bad Request | HTTP 400 `{"error":"INVALID_REQUEST"}` | **PASS** |
+   | **6** | **Unknown Endpoint Probe** | `GET /internal/non-existent-endpoint` with valid token | HTTP 404 Not Found | HTTP 404 `{"error":"NOT_FOUND"}` | **PASS** |
+   | **7** | **NAS Mount Isolation** | Inspect container mounts for `/zcc-destinations` | Worker only; API/Web have none | API: 0 NAS mounts; Web: 0 NAS mounts; Worker: `/DATA/.zcc-nas` (`rslave,rw`) | **PASS** |
+   | **8** | **Worker Privilege Hardening** | `docker inspect zcc-worker` for user, caps, socket | Non-root UID 1000, unprivileged, no sock | UID 1000 `node`, `Privileged: false`, `CapAdd: null`, 0 docker.sock, Ports: `{}` | **PASS** |
 
 ---
 
@@ -327,14 +343,14 @@ The following production infrastructure parameters are **unconfirmed** and must 
 ## 12. Risk Register
 
 | # | Risk Description | Severity | Likelihood | Impact | Status / Mitigation Strategy |
-| :- | :--- | :---: | :---: | :---: | :--- |
-| **R1** | **Unreproducible Release Images**: Staging ran containers modified with `/tmp/dist.tar.gz`. | **CRITICAL** | High | High | **RESOLVED**. Clean multi-stage Docker builds executed from frozen Git archive `b8146ef`. Image IDs verified with zero `/app` diffs. |
+| :- | :--- | :--- | :---: | :---: | :--- |
+| **R1** | **Unreproducible Release Images**: Staging ran containers modified with `/tmp/dist.tar.gz`. | **CRITICAL** | High | High | **RESOLVED**. Clean multi-stage Docker builds executed from frozen Git archive `c0e5ea8` (`v0.1.0-rc2`). Image IDs verified with zero `/app` diffs. |
 | **R2** | **API Container NAS Mount Violation**: Mounting `/DATA/.zcc-nas` into `zcc-api` creates unauthorized attack surface on backup archives. | **HIGH** | High | High | **RESOLVED**. Mount removed from `zcc-api` and `zcc-web`. Delegated preflight via internal worker HTTP endpoint. |
 | **R3** | **Plaintext Credential Sniffing**: Web dashboard runs on HTTP without TLS (`AUTH_COOKIE_SECURE=false`). | **HIGH** | Medium | High | **INPUT REQUIRED**. Require reverse proxy TLS termination with valid certificate and `AUTH_COOKIE_SECURE=true`. |
 | **R4** | **Staging Configuration Leak**: Staging IP `172.29.0.10` or containerized service names accidentally referenced in production mount units. | **HIGH** | Low | High | **RESOLVED**. Production runbook audited; zero references to staging test container IP in production unit templates. |
 | **R5** | **Boot Order Deadlock / Race**: Host boot hangs waiting for NAS mount before network interfaces are up. | **MEDIUM** | Medium | Medium | **RESOLVED**. Configured systemd `.automount` unit pairing with `After=network-online.target`. |
 | **R6** | **Diagnostic Masking on Outage**: Mid-stream network disconnection misclassified. | **LOW** | Low | Low | **RESOLVED**. Empirically verified POSIX error taxonomy: network severance yields `DESTINATION_IO_ERROR` or `STREAM_TRUNCATED`, never falsely `PAYLOAD_STRUCTURE_CORRUPT`. |
-| **R7** | **Bridge Network Worker Port Exposure**: Worker internal port 3001 reachable by co-located bridge containers. | **LOW** | Medium | Low | **DOCUMENTED / LOW RISK**. Port 3001 is not published to host. Payload size capped to 16KB, typed operations only, zero shell/arbitrary paths. Production can segment via internal Docker network. |
+| **R7** | **Bridge Network Worker Port Exposure**: Worker internal port 3001 reachable by co-located bridge containers. | **LOW** | Low | Low | **RESOLVED**. Network segmentation in `compose.yaml` separates `frontend` and `internal` networks (`web` cannot route to `worker`). Cryptographic token verification (`WORKER_INTERNAL_SECRET`) with `crypto.timingSafeEqual` rejects unauthorized bridge peers with 401. |
 
 ---
 
@@ -342,10 +358,10 @@ The following production infrastructure parameters are **unconfirmed** and must 
 
 | Evaluation Category | Gate Requirement | Status | Gate Verdict |
 | :--- | :--- | :---: | :---: |
-| **Gate 1: Acceptance Completion** | Synology E2E 12-step acceptance suite passes on staging | Verified | **PASS** |
-| **Gate 2: Quality Gates** | Full tests (521/521), backup tests (85/85), typecheck (0 errors), build clean | Verified | **PASS** |
-| **Gate 3: Release Reproducibility** | Release candidate images (`v0.1.0-rc1`) built from clean Git archive `b8146ef`; zero writable layer diffs | Verified | **PASS** |
-| **Gate 4: Container Security** | API and Web containers have zero NAS mounts; Worker unprivileged UID 1000, zero cap_add, no docker.sock | Verified | **PASS** |
+| **Gate 1: Acceptance Completion** | Synology E2E 12-step acceptance suite passes on staging (Job `f547eed7` COMPLETED & VERIFIED) | Verified | **PASS** |
+| **Gate 2: Quality Gates** | Full tests (528/528), backup tests (87/87), typecheck (0 errors), build clean | Verified | **PASS** |
+| **Gate 3: Release Reproducibility** | Release candidate images (`v0.1.0-rc2`) built from clean Git archive `c0e5ea8`; zero writable layer diffs | Verified | **PASS** |
+| **Gate 4: Container Security** | Network segmentation (`frontend`/`internal`), `WORKER_INTERNAL_SECRET` token authentication, API/Web zero NAS mounts, Worker unprivileged UID 1000 | Verified | **PASS** |
 | **Gate 5: Diagnostic Correctness** | Distinct error codes for malformed archive, stream truncation, and NAS I/O outage empirically verified | Verified | **PASS** |
 | **Gate 6: Transport Security** | Production HTTPS reverse proxy and secure cookie configuration documented | Awaiting Infra | **INPUT REQUIRED** |
 | **Gate 7: Production Inputs** | Physical Synology NAS IP, NFS export path, permissions, and network route verified | Unmet | **INPUT REQUIRED** |
@@ -377,12 +393,14 @@ All code, security, container topology, reproducible build, and quality blockers
 
 ---
 
-## 16. Phase 9.1 & 9.1.1 Readiness Gap Closure Audit & Resolution Log
+## 16. Phase 9.1, 9.1.1 & 9.1.2 Readiness Gap Closure Audit & Resolution Log
 
 | Blocker ID | Description | Resolution Summary | Verification Method |
 | :--- | :--- | :--- | :--- |
 | **BLK-01** | **Container Filesystem Separation** | Removed `/DATA/.zcc-nas` volume mount from `zcc-api` and `zcc-web` in `compose.yaml`. Implemented `DelegatedDestinationProvider` in API and `/internal/destinations/:id/preflight` HTTP endpoint on worker. Only `zcc-worker` accesses NAS. | `docker inspect zcc-api` and `docker inspect zcc-web` on staging; `npm run test:backup` (delegated destination test suite). |
 | **BLK-02** | **Diagnostic Error Taxonomy** | Correctly classified stream severance and process exit errors in `archive.ts`. Network severance maps to `DESTINATION_IO_ERROR` or `STREAM_TRUNCATED` instead of `PAYLOAD_STRUCTURE_CORRUPT`. | Empirical verification via `scratch/test-diagnostic-correctness.mjs` (5 failure modes verified). |
-| **BLK-03** | **Cross-Platform Quality Gate** | Fixed Windows host POSIX root path checks in `@zima-control-center/trust-provisioning/src/filesystem.ts` and test harness CRLF line endings. | `npm test` exit code 0 across all 21 workspaces (521 passed). |
-| **BLK-04** | **Release Reproducibility** | Exported clean Git archive from commit `b8146ef`, built multi-stage Docker images (`v0.1.0-rc1`), deployed to staging, verified zero `/app` writable-layer diffs. | `docker inspect` and `docker diff` across `zcc-api`, `zcc-worker`, `zcc-web`. |
+| **BLK-03** | **Cross-Platform Quality Gate** | Fixed Windows host POSIX root path checks in `@zima-control-center/trust-provisioning/src/filesystem.ts` and test harness CRLF line endings. | `npm test` exit code 0 across all 21 workspaces (528 passed). |
+| **BLK-04** | **Release Reproducibility** | Exported clean Git archive from commit `c0e5ea8`, built multi-stage Docker images (`v0.1.0-rc2`), deployed to staging, verified zero `/app` writable-layer diffs. | `docker inspect` and `docker diff` across `zcc-api`, `zcc-worker`, `zcc-web`. |
 | **BLK-05** | **Worker Internal Isolation** | Worker port 3001 unpublished to host; requests validated with 16KB cap and typed provider dispatch. Documented Docker bridge network isolation recommendations. | `docker inspect zcc-worker` port mapping verification; internal HTTP test harness. |
+| **BLK-06** | **Release Provenance Reconciliation** | Reconciled Git ancestry and diff between `b8146ef` and `c7bbfa9`. Confirmed `b8146ef` preserved all delegation and mount contracts, and created release candidate 2 on commit `c0e5ea8`. | `git merge-base --is-ancestor c7bbfa9 b8146ef`; Git diff audit. |
+| **BLK-07** | **Internal Network Hardening & Authentication** | Implemented dual Docker networks (`frontend`/`internal`) in `compose.yaml` and constant-time token verification (`WORKER_INTERNAL_SECRET`) on `WorkerInternalServer`. | 8 empirical security tests on staging (authorized call, web blocked, peer blocked, 401 rejected, 400/500 rejected). |

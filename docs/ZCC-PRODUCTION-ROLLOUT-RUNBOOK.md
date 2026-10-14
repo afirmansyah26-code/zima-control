@@ -1,10 +1,11 @@
-# ZCC — Production Rollout & Rollback Runbook (Phase 9.1.1)
+# ZCC — Production Rollout & Rollback Runbook (Phase 9.1.2)
 
 | Metadata | Value |
 | :--- | :--- |
 | **Document** | Production Deployment & Rollback Runbook |
+| **Phase** | Phase 9.1.2 — Release Provenance Reconciliation & Internal Network Hardening |
 | **Target Host (Reference Only)** | ZimaOS `10.10.0.28` (`ZimaCube`, Linux Kernel `6.18.9 x86_64`) |
-| **Release Baseline Commit** | `b8146ef60d93f71abad49fd9a5ebfd910456924f` |
+| **Release Baseline Commit** | `c0e5ea89104b341f238fa0c0423c52a0a25fa2be` |
 | **Prerequisite Audit** | `docs/ZCC-PRODUCTION-READINESS-AUDIT.md` |
 | **Destination Technical Design** | `docs/ZCC-SYNOLOGY-DESTINATION-DESIGN.md` |
 | **Authoritative Architecture** | `docs/ZCC-PRODUCT-ARCHITECTURE-AND-SCOPE.md` |
@@ -12,7 +13,7 @@
 
 > [!WARNING]
 > **OPERATIONAL NOTICE**:
-> This runbook is a **planned operational specification**. In accordance with Phase 9.1.1 constraints, **NO COMMANDS in this runbook were executed against production (`10.10.0.28`)**.
+> This runbook is a **planned operational specification**. In accordance with Phase 9.1.2 constraints, **NO COMMANDS in this runbook were executed against production (`10.10.0.28`)**.
 > Execution of this runbook requires formal resolution of all audit blockers and a signed GO decision.
 
 ---
@@ -24,6 +25,7 @@
 2. **Read-Only Application Coupling**: ZCC interacts with application persistent storage strictly via read-only volume mounts (`/DATA/AppData/<app>/storage:ro`). ZCC never modifies application source trees.
 3. **Fail-Closed Backup Safety**: Backup operations abort immediately upon share unmount or marker mismatch without writing partial fallback files to local storage.
 4. **Reproducible Image Provenance**: Production containers must be built from the frozen Git release commit, never copied from staging or modified interactively.
+5. **Internal Network Segmentation**: Worker container communicates solely with API over dedicated `internal` Docker network; Web container and external bridge containers have zero network route to worker port 3001.
 
 ---
 
@@ -43,6 +45,7 @@ PROD_WEB_PORT="8080"
 PROD_API_PORT="3000"
 PROD_ADMIN_USER="admin"
 PROD_ADMIN_PASS="<GENERATE_SECURE_RANDOM_PASSWORD>"
+PROD_WORKER_INTERNAL_SECRET="<GENERATE_SECURE_RANDOM_SECRET>"
 ```
 
 ---
@@ -53,10 +56,10 @@ PROD_ADMIN_PASS="<GENERATE_SECURE_RANDOM_PASSWORD>"
 - **Action**: Verify local repository is checked out at the approved release commit and working tree is clean.
 - **Runbook Command**:
   ```bash
-  git checkout b8146ef60d93f71abad49fd9a5ebfd910456924f
+  git checkout c0e5ea89104b341f238fa0c0423c52a0a25fa2be
   git status
   ```
-- **Expected Result**: `HEAD detached at b8146ef`, `nothing to commit, working tree clean`.
+- **Expected Result**: `HEAD detached at c0e5ea8`, `nothing to commit, working tree clean`.
 - **Failure Condition**: Uncommitted changes or different commit SHA.
 - **Rollback Action**: Abort rollout. Run `git reset --hard` or re-checkout approved commit.
 
@@ -66,9 +69,9 @@ PROD_ADMIN_PASS="<GENERATE_SECURE_RANDOM_PASSWORD>"
 - **Action**: Build release container images using repository Dockerfiles.
 - **Runbook Command**:
   ```bash
-  docker build -f Dockerfile.api -t zima-control-center/api:v0.1.0-rc1 -t zima-control-center/api:latest .
-  docker build -f Dockerfile.worker -t zima-control-center/worker:v0.1.0-rc1 -t zima-control-center/worker:latest .
-  docker build -f Dockerfile.web -t zima-control-center/web:v0.1.0-rc1 -t zima-control-center/web:latest .
+  docker build -f Dockerfile.api -t zima-control-center/api:v0.1.0-rc2 -t zima-control-center/api:latest .
+  docker build -f Dockerfile.worker -t zima-control-center/worker:v0.1.0-rc2 -t zima-control-center/worker:latest .
+  docker build -f Dockerfile.web -t zima-control-center/web:v0.1.0-rc2 -t zima-control-center/web:latest .
   ```
 - **Expected Result**: Zero build errors; 3 distinct image IDs generated.
 - **Failure Condition**: `tsc`, `npm ci`, or `prisma generate` fails during build.
@@ -80,13 +83,13 @@ PROD_ADMIN_PASS="<GENERATE_SECURE_RANDOM_PASSWORD>"
 - **Action**: Record and audit SHA-256 digests of built images.
 - **Runbook Command**:
   ```bash
-  docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/api:v0.1.0-rc1
-  docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/worker:v0.1.0-rc1
-  docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/web:v0.1.0-rc1
+  docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/api:v0.1.0-rc2
+  docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/worker:v0.1.0-rc2
+  docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/web:v0.1.0-rc2
   ```
 - **Expected Result**: Image digests match build manifest; zero runtime diffs:
-  - `zcc-api`: `sha256:d23befbbfb7c58e658679f9d7b29fbd2d8fea455c984bb4ea4089ac439546bfa`
-  - `zcc-worker`: `sha256:b6371201ba1a0a41df9cbd94e70384d940350ce8507b876f3305234a45df030e`
+  - `zcc-api`: `sha256:57e5b76b9d8871a6ad3cd0befc5c9fe19d8cbefa86f75dc8737f9d65f243fc15`
+  - `zcc-worker`: `sha256:97872ee7da4f1b6a199d5b65e20f57df819e394ef9feeaee310fd5e93b9d60b0`
   - `zcc-web`: `sha256:246938d1e64e41637f520e0ab24c423c6d161ec73495099739ae50c0c775c6cd`
 - **Failure Condition**: Images corrupted or missing expected tags.
 - **Rollback Action**: Delete faulty images with `docker rmi`; rebuild from scratch.
@@ -94,12 +97,12 @@ PROD_ADMIN_PASS="<GENERATE_SECURE_RANDOM_PASSWORD>"
 ---
 
 ### Step 4: Review Production Compose Configuration
-- **Action**: Validate `compose.yaml` to ensure strict volume separation (NAS mount exclusively on `worker`).
+- **Action**: Validate `compose.yaml` to ensure strict volume separation (NAS mount exclusively on `worker`) and network segmentation (`frontend` for web/api, `internal` for api/worker).
 - **Target `compose.yaml` Definition**:
   ```yaml
   services:
     api:
-      image: zima-control-center/api:v0.1.0-rc1
+      image: zima-control-center/api:v0.1.0-rc2
       container_name: zcc-api
       environment:
         DATABASE_URL: file:/data/registry.db
@@ -110,35 +113,44 @@ PROD_ADMIN_PASS="<GENERATE_SECURE_RANDOM_PASSWORD>"
         TRUST_FORWARDED_PROTO: "true"
         AUTH_COOKIE_SECURE: "true" # Set to true when behind TLS reverse proxy
         WORKER_INTERNAL_URL: http://worker:3001
+        WORKER_INTERNAL_SECRET: ${WORKER_INTERNAL_SECRET:-}
       volumes:
         - registry-data:/data
         - /run/zcc/application-runtime.sock:/run/zcc/application-runtime.sock
+      networks:
+        - frontend
+        - internal
       restart: unless-stopped
 
     web:
-      image: zima-control-center/web:v0.1.0-rc1
+      image: zima-control-center/web:v0.1.0-rc2
       container_name: zcc-web
       ports:
         - "8080:8080"
+      networks:
+        - frontend
       depends_on:
         api:
           condition: service_healthy
       restart: unless-stopped
 
     worker:
-      image: zima-control-center/worker:v0.1.0-rc1
+      image: zima-control-center/worker:v0.1.0-rc2
       container_name: zcc-worker
       environment:
         DATABASE_URL: file:/data/registry.db
         ZIMAOS_BASE_URL: http://127.0.0.1
         OBSERVATION_INTERVAL_MS: 30000
         WORKER_INTERNAL_PORT: 3001
+        WORKER_INTERNAL_SECRET: ${WORKER_INTERNAL_SECRET:-}
         NODE_ENV: production
       volumes:
         - registry-data:/data
         - /run/zcc/application-runtime.sock:/run/zcc/application-runtime.sock
         - /DATA/AppData:/DATA/AppData:ro
         - /DATA/.zcc-nas:/zcc-destinations:rslave,rw
+      networks:
+        - internal
       depends_on:
         api:
           condition: service_healthy
@@ -146,9 +158,15 @@ PROD_ADMIN_PASS="<GENERATE_SECURE_RANDOM_PASSWORD>"
 
   volumes:
     registry-data:
+
+  networks:
+    frontend:
+      driver: bridge
+    internal:
+      driver: bridge
   ```
-- **Expected Result**: `api` has NO `/DATA/.zcc-nas` mount; `worker` has `/DATA/.zcc-nas` with `rslave,rw`.
-- **Failure Condition**: `api` or `web` contains `/DATA/.zcc-nas` volume definition.
+- **Expected Result**: `api` has NO `/DATA/.zcc-nas` mount; `worker` has `/DATA/.zcc-nas` with `rslave,rw`; `web` has no route to `worker`.
+- **Failure Condition**: `api` or `web` contains `/DATA/.zcc-nas` volume definition or `web` is attached to `internal`.
 - **Rollback Action**: Correct `compose.yaml` immediately.
 
 ---
@@ -282,7 +300,7 @@ PROD_ADMIN_PASS="<GENERATE_SECURE_RANDOM_PASSWORD>"
 ---
 
 ### Step 11: Execute Health Checks & Bootstrap Administrator
-- **Action**: Verify API readiness and bootstrap initial production administrator.
+- **Action**: Verify API readiness and bootstrap initial production administrator. Ensure `WORKER_INTERNAL_SECRET` is defined in `/DATA/AppData/zima-control-center/.env`.
 - **Runbook Command**:
   ```bash
   # Check ready endpoint
@@ -385,7 +403,7 @@ PROD_ADMIN_PASS="<GENERATE_SECURE_RANDOM_PASSWORD>"
 - **Action**: Record deployment metadata and freeze baseline state.
 - **Runbook Command**:
   ```bash
-  echo "DEPLOYED: $(date -u --iso-8601=seconds) COMMIT: b8146ef" >> /DATA/AppData/zima-control-center/deployment.log
+  echo "DEPLOYED: $(date -u --iso-8601=seconds) COMMIT: c0e5ea8" >> /DATA/AppData/zima-control-center/deployment.log
   ```
 - **Expected Result**: Checkpoint committed. Operational handover complete.
 
