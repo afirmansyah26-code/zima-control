@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.api
-    image: zima-control-center/api:latest
+    image: zima-control-center/api:v0.1.0-rc3
     container_name: zcc-api
     environment:
       DATABASE_URL: ${DATABASE_URL:-file:/data/registry.db}
@@ -34,7 +34,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.web
-    image: zima-control-center/web:latest
+    image: zima-control-center/web:v0.1.0-rc3
     container_name: zcc-web
     environment:
       API_UPSTREAM_HOST: api
@@ -58,7 +58,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
-    image: zima-control-center/worker:latest
+    image: zima-control-center/worker:v0.1.0-rc3
     container_name: zcc-worker
     environment:
       DATABASE_URL: ${DATABASE_URL:-file:/data/registry.db}
