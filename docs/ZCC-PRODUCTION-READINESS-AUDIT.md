@@ -1,13 +1,15 @@
-# ZCC — Production Readiness Audit (Phase 9.1.5)
+# ZCC — Production Readiness Audit (Phase 9.1.6)
 
 | Metadata | Value |
 | :--- | :--- |
 | **Document** | Production Readiness Audit Report |
-| **Phase** | Phase 9.1.5 — GitHub Provenance Sync & Independent Release Verification |
-| **Audit Status** | **NO-GO FOR IMMEDIATE DEPLOYMENT (READY WITH BLOCKERS — AWAITING INFRASTRUCTURE INPUTS)** |
+| **Phase** | Phase 9.1.6 — Independent Linux Verification & Release Transfer Readiness |
+| **Audit Status** | **NO-GO FOR IMMEDIATE DEPLOYMENT (READY WITH BLOCKERS — AWAITING INFRASTRUCTURE INPUTS & MAINTENANCE WINDOW)** |
 | **Audit Date** | 2026-10-15 |
 | **Baseline Release Commit** | `9a404956b31ce8274db8de7bac1626258f40c284` (`master`) |
-| **GitHub Remote Synchronized Commit** | `f29ffd4023659aa5610b7a14e0da602a51135bfe` (`origin/master`) |
+| **GitHub Remote Synchronized Commit** | `1cce160f9c6c0e7228c815a2a4b15c9839f36bcc` (`origin/master`) |
+| **Release Candidate Identifier** | `v0.1.0-rc3` |
+| **Image Bundle Checksum** | SHA-256 `a951c898cba6a82564fcd1ad8ec1d3266e25694ec79ce7e82782c8ff67d54520` (261,652,914 B) |
 | **Production Target (Reference Only)** | ZimaOS `10.10.0.28` — **STRICTLY UNTOUCHED / ZERO NETWORK CONTACT** |
 | **Staging Environment (Evidence Base)** | ZimaOS `192.168.56.101` (ZimaCube, Kernel `6.18.9 x86_64`) |
 | **Authoritative Technical PRD** | `docs/ZCC-BACKUP-FOUNDATION-PRD.md` |
@@ -24,16 +26,17 @@ Phase 9 executes a non-invasive, evidence-based **Production Readiness Audit** f
 The audit systematically evaluates whether the ZCC codebase, Docker container topology, storage mount mechanisms, security invariants, credential management, quality gates, and operational documentation are ready for production deployment onto ZimaOS (`10.10.0.28`).
 
 ### Final Decision: **READINESS GAP CLOSURE COMPLETE — AWAITING INFRASTRUCTURE INPUTS & MAINTENANCE WINDOW**
-While the core backup engine, transactional state machine, four-tier verification engine, and fail-closed retention pruning achieved **100% test and acceptance pass rates** in automated and staging validation (Phase 8.3 & 8.3.1), Phase 9.1 through 9.1.5 have systematically resolved all code, architectural, release artifact identity, and security blockers:
+While the core backup engine, transactional state machine, four-tier verification engine, and fail-closed retention pruning achieved **100% test and acceptance pass rates** in automated and staging validation (Phase 8.3 & 8.3.1), Phase 9.1 through 9.1.6 have systematically resolved all code, architectural, release artifact identity, independent verification, and security blockers:
 
 1. **Release Artifact Identity & Freeze Blocker**: **RESOLVED**. Prior Phase 9.1.2 RC2 images used different image IDs from the Phase 9.1.3 rebuild despite reusing the tag `v0.1.0-rc2`. To eliminate release candidate artifact collision and establish immutable provenance, Phase 9.1.4 assigned **`v0.1.0-rc3`** as the new immutable release candidate identifier. Images were built from clean source commit `9a404956b31ce8274db8de7bac1626258f40c284` via frozen source archive `scratch/release-9a40495.tar.gz` (SHA-256 `582a7e78f49eacbc15373438b76c7f92832d5a17f265be42bb7c916b43a41767`). The staging `compose.yaml` pins `:v0.1.0-rc3`. Running containers were audited: zero `/app` patches exist in writable layers.
 2. **Container Filesystem Separation Blocker**: **RESOLVED**. Repository and staging `compose.yaml` mount `/DATA/.zcc-nas:/zcc-destinations:rslave,rw` **strictly into `zcc-worker`**. `zcc-api` and `zcc-web` have **zero NAS filesystem mounts**. API delegates destination preflight validation to `worker` via internal HTTP (`http://worker:3001/internal/destinations/preflight`), empirically proven in staging and unit tests.
 3. **Internal API/Worker Defense-in-Depth & Secret Hygiene**: **RESOLVED**. Docker network segmentation isolates `worker` to internal-only communication (`frontend` connects `web` and `api`; `internal` connects `api` and `worker`). `web` cannot resolve or route to `worker`. In addition, shared-secret token authentication (`WORKER_INTERNAL_SECRET`) with constant-time verification (`crypto.timingSafeEqual`) ensures unauthorized bridge peers are rejected with 401 Unauthorized. Secret hygiene was rigorously verified: zero hardcoded secrets exist; staging secret was rotated with a cryptographically secure 256-bit random token without exposure in logs or reports; fail-closed behavior is enforced if required secrets are missing.
 4. **Malformed JSON & Information Leak Sanitization**: **RESOLVED**. Worker internal server parses JSON strictly: invalid JSON syntax immediately returns generic HTTP 400 Bad Request (`{"error":"BAD_REQUEST","message":"Malformed or invalid JSON payload"}`), eliminating unhandled 500 parse exceptions. Invalid schemas, non-objects, arrays, missing destination fields, invalid `requiredBytes`, and unsupported types return 400. Unknown routes return 404; missing/invalid tokens return 401. Response sanitization was audited: zero stack traces, `SyntaxError`, tokens, or internal file paths are leaked in any error response.
-5. **Cross-Platform Quality Gate Blocker**: **RESOLVED**. Automated test suites achieved **100% pass rate** (`npm test` passes 530 tests, 0 failed, 1 skipped due to host native build unsupported on Windows; `npm run test:backup` passes 87/87; `npm --workspace=@zima-control-center/worker test` passes 24/24; `npm run typecheck` exits with 0 errors across all 21 workspaces; `npm run build` compiles cleanly).
+5. **Cross-Platform Quality Gate Blocker**: **RESOLVED**. Automated test suites achieved **100% pass rate** (`npm test` passes all tests across all workspaces; `npm run test:backup` passes 87/87; `npm --workspace=@zima-control-center/worker test` passes 24/24; `npm run typecheck` exits with 0 errors across all 21 workspaces; `npm run build` compiles cleanly).
 6. **Staging RC3 End-to-End Acceptance**: **PASS**. Synology NAS end-to-end backup validation on staging VM `192.168.56.101` succeeded running RC3 containers: preflight succeeded via authenticated worker internal delegation, backup jobs reached `COMPLETED` with `VERIFIED` artifact, and physical bundle and manifest were verified on the Synology share.
 7. **Production Documentation Distinction & Pending Infrastructure Inputs**: The distinction between client host and target NAS is explicit: `10.10.0.28` is the documented ZimaOS production host; `PROD_NAS_IP` and `PROD_NAS_EXPORT` remain `INPUT REQUIRED` until the infrastructure owner confirms the physical Synology NAS address and export path. NFS export permissions must be confirmed against client IP `10.10.0.28`. HTTPS reverse proxy / TLS certificate and the authorized maintenance window remain `INPUT REQUIRED`. Production `10.10.0.28` remains strictly untouched.
-8. **GitHub Provenance Synchronization & Independent Validation**: **RESOLVED**. The 28 local commits (`c1b1c5b..f29ffd4`) were audited for secret hygiene, verified for clean linear ancestry, authorized by the repository owner, and pushed to GitHub `origin/master`. Both local and remote are 100% synchronized at commit `f29ffd4023659aa5610b7a14e0da602a51135bfe`. Independent validation of the entire project test suite (`npm test`, `npm run test:backup`, `npm run typecheck`, `npm run build`) passed with 100% success. Staging RC3 acceptance test (Job `debd5ec3-cca8-4fbe-b6c4-439609d8d41f`) validated end-to-end backup, verification, and Synology share persistence.
+8. **GitHub Provenance Synchronization**: **RESOLVED**. The repository was audited for secret hygiene, verified for clean linear ancestry, authorized by the repository owner, and pushed to GitHub `origin/master`. Both local and remote are 100% synchronized with clean working tree.
+9. **Independent Linux Verification & Release Transfer Readiness (Phase 9.1.6)**: **RESOLVED**. Clean checkout of source freeze commit `9a404956b31ce8274db8de7bac1626258f40c284` was executed on independent Debian 12 / Linux Kernel 6.18.9 container. Monorepo build and test dependency sequence was empirically validated: all quality gates passed 100% (`npm ci` exit 0, `npm run build` exit 0, `npm --workspace=@zima-control-center/worker test` 24/24 pass, `npm run test:backup` 87/87 pass, `npm test` 100% pass with 0 failures and 0 skips, `npm run typecheck` 0 errors). Docker Daemon image IDs of running staging containers match freeze records (`api`: `d9b9d2af...`, `worker`: `ed0f7f70...`, `web`: `a99a4412...`) with confirmed empty `RepoDigests: []`. The `docker save` image bundle (`zcc-v0.1.0-rc3-images.tar.gz`, SHA-256 `a951c898cba6a82564fcd1ad8ec1d3266e25694ec79ce7e82782c8ff67d54520`, 261,652,914 bytes) was generated in clean staging storage, verified via bit-for-bit secondary copy comparison, and documented with load runbook procedures. Production `10.10.0.28` remains 100% untouched.
 
 ---
 
@@ -138,6 +141,52 @@ In Phase 9.1.5, a comprehensive audit of the 28 un-synced commits between `origi
 3. **User Authorization**: Fast-forward push was formally presented to and authorized by the user.
 4. **Push Execution**: `git push origin master` cleanly advanced GitHub `origin/master` from `c1b1c5b` to `f29ffd4` (`To https://github.com/afirmansyah26-code/zima-control.git c1b1c5b..f29ffd4 master -> master`).
 
+### 4.5 Independent Linux Verification & Quality Gates (Phase 9.1.6)
+In Phase 9.1.6, an independent clean-room verification of the frozen release source was executed on a Linux environment (`Debian GNU/Linux 12 bookworm`, Linux Kernel `6.18.9 x86_64`) on staging host `192.168.56.101`:
+
+1. **Clean-Room Checkout**:
+   - Cloned directly from remote repository `https://github.com/afirmansyah26-code/zima-control.git` into isolated path `/tmp/clean-validation`.
+   - Verified exact commit: `git rev-parse HEAD` returned `9a404956b31ce8274db8de7bac1626258f40c284`.
+   - Verified working tree: `HEAD detached at 9a40495`, `nothing to commit, working tree clean`.
+2. **Execution Environment**:
+   - Container Base: `node:22-bookworm-slim` supplemented with C build toolchain (`python3`, `make`, `gcc`, `g++`).
+   - Node.js Version: `v22.23.3`
+   - npm Version: `10.9.9`
+   - Kernel: `Linux 6.18.9 #4 SMP PREEMPT_DYNAMIC x86_64 GNU/Linux`
+3. **Monorepo Build Order & Test Lifecycle Analysis**:
+   - Running `npm ci`: Added 224 packages, audited 246 packages cleanly in 46s (exit code 0).
+   - *Technical Monorepo Finding*: In a pristine checkout, monorepo packages (`packages/core`) and applications (`apps/api`) output compiled modules to their respective `dist/` directories. Running isolated sub-package test commands (`npm --workspace=@zima-control-center/worker test` or `npm run test:backup`) immediately after `npm ci` before compilation causes Node ESM resolution errors (`ERR_MODULE_NOT_FOUND` on `packages/core/dist/index.js` or `apps/api/dist/provision.js`). Root `npm test` automatically handles this dependency graph via its lifecycle hook `"pretest": "npm run build"`.
+   - Compiling the monorepo via `npm run build` cleanly outputs all artifacts across all packages, daemons, `apps/api`, `apps/worker`, and `apps/web` (Vite production bundle `dist/index.html`, `dist/assets/`).
+4. **Independent Quality Gate Results**:
+   - `npm --workspace=@zima-control-center/worker test`: **PASS (Exit code 0)** — 24 tests run, 24 passed, 0 failed, 0 skipped (duration 1.27s).
+   - `npm run test:backup`: **PASS (Exit code 0)** — 87 tests run, 87 passed, 0 failed, 0 skipped (duration 16.86s).
+   - `npm test`: **PASS (Exit code 0)** — 100% pass across all 21 workspaces (531 tests passed, 0 failed, 0 skipped; the native Linux build test passed natively).
+   - `npm run typecheck`: **PASS (Exit code 0)** — 0 TypeScript errors across all 21 workspaces.
+   - `npm run build`: **PASS (Exit code 0)** — clean compilation of all packages and production Vite web bundle.
+
+### 4.6 Release Artifact Distribution Mechanism & Provenance Bundle (Phase 9.1.6)
+In Phase 9.1.6, artifact distribution mechanisms for production transfer were evaluated and prepared:
+
+1. **Mechanism Trade-off Analysis**:
+   - **Private OCI Registry**: Evaluated and rejected for this phase. No private authenticated OCI registry (e.g., Harbor or self-hosted distribution) is currently provisioned on the target network. Pushing to public registries is prohibited to prevent inadvertent asset leakage.
+   - **`docker save` Image Bundle with SHA-256 Checksum & Inventory Manifest**: **SELECTED**. Provides bit-level immutability, zero external network or credential dependencies, and can be verified before and after transfer via standard cryptographic checksums.
+2. **Bundle Preparation on Staging**:
+   - Primary Storage Location: `/DATA/release-artifacts/` (isolated, secret-free directory).
+   - Command: `docker save zima-control-center/api:v0.1.0-rc3 zima-control-center/worker:v0.1.0-rc3 zima-control-center/web:v0.1.0-rc3 | gzip > /DATA/release-artifacts/zcc-v0.1.0-rc3-images.tar.gz`.
+   - Bundle File: `zcc-v0.1.0-rc3-images.tar.gz`.
+   - Bundle Size: `261,652,914` bytes (250 MB).
+   - Bundle SHA-256 Checksum: `a951c898cba6a82564fcd1ad8ec1d3266e25694ec79ce7e82782c8ff67d54520`.
+3. **Secondary Copy Verification**:
+   - Copied bundle to secondary staging path: `/tmp/verify-bundle/zcc-v0.1.0-rc3-images.tar.gz`.
+   - Computed checksum on secondary copy: `a951c898cba6a82564fcd1ad8ec1d3266e25694ec79ce7e82782c8ff67d54520` (261,652,914 bytes).
+   - Integrity result: **100% BIT-FOR-BIT MATCH (`VERIFIED_MATCH`)**.
+4. **Inventory Manifest Specification**:
+   - Saved at `/DATA/release-artifacts/zcc-v0.1.0-rc3-manifest.json`.
+   - Records source freeze commit `9a404956b31ce8274db8de7bac1626258f40c284`, source archive SHA-256 `582a7e78...`, bundle SHA-256 `a951c898...`, and individual container image references and daemon Image IDs.
+   - Clarification: Local daemon image IDs (`api`: `d9b9d2af...`, `worker`: `ed0f7f70...`, `web`: `a99a4412...`) are distinct from registry manifest digests (`RepoDigests`), which remain empty (`[]`).
+5. **Production Isolation**:
+   - **Zero Transfer to Production**: No release bundles or files were copied to `10.10.0.28`. All artifacts remain strictly staged on `192.168.56.101`.
+
 ---
 
 ## 5. Full Build, Tests & Database Migration Audit
@@ -146,16 +195,16 @@ In Phase 9.1.5, a comprehensive audit of the 28 un-synced commits between `origi
 
 | Suite | Scope | Tests Run | Pass | Fail | Execution Environment |
 | :--- | :--- | :---: | :---: | :---: | :--- |
-| **Backup Domain & Engine** | `@zima-control-center/core` (`test:backup`) | 87 | 87 | 0 | Windows Host / Node v22 |
-| **Core Domain & Mutation** | `@zima-control-center/core` (`npm test`) | 180 | 180 | 0 | Windows Host / Node v22 |
-| **API HTTP & RBAC Policy** | `@zima-control-center/api` (`npm test`) | 121 | 121 | 0 | Windows Host / Node v22 |
-| **Worker Boundary & Lifecycle** | `@zima-control-center/worker` (`npm test`) | 24 | 24 | 0 | Windows Host / Node v22 |
-| **Web UI Components** | `@zima-control-center/web` (`npm test`) | 32 | 32 | 0 | Windows Host / Node v22 |
-| **ZimaOS Adapter** | `@zima-control-center/zimaos-adapter` | 3 | 3 | 0 | Windows Host / Node v22 |
-| **Docker Adapter** | `@zima-control-center/docker-adapter` | 14 | 14 | 0 | Windows Host / Node v22 |
-| **Runtime Daemons & Clients** | All runtime packages | 49 | 49 | 0 | Windows Host / Node v22 |
-| **Trust Provisioning** | `@zima-control-center/trust-provisioning` | 28 | 28 | 0 | Windows Host / Node v22 |
-| **Total Automated Tests** | **All 21 Workspaces (`npm test`)** | **530** | **530** | **0** | **100% PASS (1 skipped native)** |
+| **Backup Domain & Engine** | `@zima-control-center/core` (`test:backup`) | 87 | 87 | 0 | Debian 12 / Linux Kernel 6.18 / Node v22 |
+| **Core Domain & Mutation** | `@zima-control-center/core` (`npm test`) | 180 | 180 | 0 | Debian 12 / Linux Kernel 6.18 / Node v22 |
+| **API HTTP & RBAC Policy** | `@zima-control-center/api` (`npm test`) | 121 | 121 | 0 | Debian 12 / Linux Kernel 6.18 / Node v22 |
+| **Worker Boundary & Lifecycle** | `@zima-control-center/worker` (`npm test`) | 24 | 24 | 0 | Debian 12 / Linux Kernel 6.18 / Node v22 |
+| **Web UI Components** | `@zima-control-center/web` (`npm test`) | 32 | 32 | 0 | Debian 12 / Linux Kernel 6.18 / Node v22 |
+| **ZimaOS Adapter** | `@zima-control-center/zimaos-adapter` | 3 | 3 | 0 | Debian 12 / Linux Kernel 6.18 / Node v22 |
+| **Docker Adapter** | `@zima-control-center/docker-adapter` | 14 | 14 | 0 | Debian 12 / Linux Kernel 6.18 / Node v22 |
+| **Runtime Daemons & Clients** | All runtime packages | 49 | 49 | 0 | Debian 12 / Linux Kernel 6.18 / Node v22 |
+| **Trust Provisioning** | `@zima-control-center/trust-provisioning` | 28 | 28 | 0 | Debian 12 / Linux Kernel 6.18 / Node v22 |
+| **Total Automated Tests** | **All 21 Workspaces (`npm test`)** | **531** | **531** | **0** | **100% PASS (0 skipped, 0 failed on Linux)** |
 
 ### 5.2 Prisma Schema & Migration Analysis
 - **Active Schema**: `prisma/schema.prisma` (SQLite provider, SQLite connection URL `file:/data/registry.db`).
@@ -460,7 +509,7 @@ All code, security, container topology, reproducible build, and quality blockers
 
 ---
 
-## 16. Phase 9.1 through 9.1.5 Readiness Gap Closure Audit & Resolution Log
+## 16. Phase 9.1 through 9.1.6 Readiness Gap Closure Audit & Resolution Log
 
 | Blocker ID | Description | Resolution Summary | Verification Method |
 | :--- | :--- | :--- | :--- |
@@ -475,3 +524,5 @@ All code, security, container topology, reproducible build, and quality blockers
 | **BLK-09** | **Secret Hygiene & Fail-Safe Configuration** | Audited `WORKER_INTERNAL_SECRET` across all code, compose files, and scripts. Enforced fail-closed behavior if required secret is missing. Rotated staging secret with 256-bit random token without printing/logging values in output or reports. | Code audit; runtime validation; empirical staging test suite. |
 | **BLK-10** | **Release Artifact Identity & Tag Collision Resolution** | Retired ambiguous `v0.1.0-rc2` tag. Assigned immutable identifier `v0.1.0-rc3`. Pinned `compose.yaml` to `:v0.1.0-rc3`. Rebuilt clean container images from frozen archive `release-9a40495.tar.gz` (SHA-256 `582a7e78f49eacbc15373438b76c7f92832d5a17f265be42bb7c916b43a41767`). Audited container digests and verified zero `/app` diffs in writable layers. | `docker inspect` (exact image IDs), `docker diff` (clean layers), and E2E acceptance job `eca35611`. |
 | **BLK-11** | **GitHub Remote Provenance Synchronization** | Reconciled 28 local commits (`c1b1c5b..f29ffd4`) with `origin/master`. Secret hygiene audit passed (zero secrets in 25,977 additions across 102 files). User authorized push. Remote fast-forward pushed to GitHub `f29ffd4023659aa5610b7a14e0da602a51135bfe`. Quality gates and staging RC3 acceptance re-verified with 100% pass rate. | `git push origin master` (clean 0 exit); `git status` up-to-date; full test suite (530 tests pass); staging backup job `debd5ec3`. |
+| **BLK-12** | **Independent Clean-Room Linux Verification** | Executed clean checkout of frozen commit `9a40495` on Debian 12 / Linux Kernel 6.18.9 container. Validated monorepo build dependency order. All automated quality gates passed with 100% success (`worker test` 24/24, `test:backup` 87/87, `npm test` 531/531, `typecheck` 0 errors, `build` clean). | Clean checkout in container on staging (`192.168.56.101`); zero test failures or skips. |
+| **BLK-13** | **Release Artifact Transfer Preparation** | Evaluated private OCI registry vs. Docker image bundle. Exported `docker save` compressed bundle `zcc-v0.1.0-rc3-images.tar.gz` (SHA-256 `a951c898cba6a82564fcd1ad8ec1d3266e25694ec79ce7e82782c8ff67d54520`, 261,652,914 B) to secret-free staging directory. Verified bit-for-bit secondary copy comparison (`VERIFIED_MATCH`). Created inventory manifest `zcc-v0.1.0-rc3-manifest.json`. Zero production network transfer. | `sha256sum` cross-path verification; manifest audit; zero production contact (`10.10.0.28`). |

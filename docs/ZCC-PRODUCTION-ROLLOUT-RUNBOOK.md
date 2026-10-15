@@ -1,12 +1,14 @@
-# ZCC — Production Rollout & Rollback Runbook (Phase 9.1.5)
+# ZCC — Production Rollout & Rollback Runbook (Phase 9.1.6)
 
 | Metadata | Value |
 | :--- | :--- |
 | **Document** | Production Deployment & Rollback Runbook |
-| **Phase** | Phase 9.1.5 — GitHub Provenance Sync & Independent Release Verification |
+| **Phase** | Phase 9.1.6 — Independent Linux Verification & Release Transfer Readiness |
 | **Target Host (Reference Only)** | ZimaOS `10.10.0.28` (`ZimaCube`, Linux Kernel `6.18.9 x86_64`) |
 | **Release Baseline Commit** | `9a404956b31ce8274db8de7bac1626258f40c284` |
-| **GitHub Synchronized Commit** | `f29ffd4023659aa5610b7a14e0da602a51135bfe` (`origin/master`) |
+| **GitHub Synchronized Documentation HEAD** | `1cce160f9c6c0e7228c815a2a4b15c9839f36bcc` (`origin/master`) |
+| **Release Candidate** | `v0.1.0-rc3` |
+| **Image Bundle Checksum** | SHA-256 `a951c898cba6a82564fcd1ad8ec1d3266e25694ec79ce7e82782c8ff67d54520` (261,652,914 B) |
 | **Prerequisite Audit** | `docs/ZCC-PRODUCTION-READINESS-AUDIT.md` |
 | **Destination Technical Design** | `docs/ZCC-SYNOLOGY-DESTINATION-DESIGN.md` |
 | **Authoritative Architecture** | `docs/ZCC-PRODUCT-ARCHITECTURE-AND-SCOPE.md` |
@@ -66,8 +68,10 @@ PROD_WORKER_INTERNAL_SECRET="<GENERATE_SECURE_RANDOM_SECRET>"
 
 ---
 
-### Step 2: Build Reproducible Release Images
-- **Action**: Build release container images using repository Dockerfiles.
+### Step 2: Provision Reproducible Release Images (Choose Path A or Path B)
+
+#### Path A: Rebuild from Frozen Git Source
+- **Action**: Build release container images using repository Dockerfiles on verified commit `9a404956b31ce8274db8de7bac1626258f40c284`.
 - **Runbook Command**:
   ```bash
   docker build -f Dockerfile.api -t zima-control-center/api:v0.1.0-rc3 -t zima-control-center/api:latest .
@@ -78,10 +82,30 @@ PROD_WORKER_INTERNAL_SECRET="<GENERATE_SECURE_RANDOM_SECRET>"
 - **Failure Condition**: `tsc`, `npm ci`, or `prisma generate` fails during build.
 - **Rollback Action**: Abort deployment. Inspect build logs; do not proceed.
 
+#### Path B: Load from Verified Artifact Bundle (Recommended for Restricted Networks)
+- **Action**: Verify the SHA-256 checksum of the prepared artifact bundle before loading images.
+- **Verification Command**:
+  ```bash
+  echo 'a951c898cba6a82564fcd1ad8ec1d3266e25694ec79ce7e82782c8ff67d54520  zcc-v0.1.0-rc3-images.tar.gz' | sha256sum -c -
+  ```
+- **Expected Verification Output**: `zcc-v0.1.0-rc3-images.tar.gz: OK`
+- **Load Command**:
+  ```bash
+  docker load -i zcc-v0.1.0-rc3-images.tar.gz
+  ```
+- **Expected Load Output**:
+  ```
+  Loaded image: zima-control-center/api:v0.1.0-rc3
+  Loaded image: zima-control-center/worker:v0.1.0-rc3
+  Loaded image: zima-control-center/web:v0.1.0-rc3
+  ```
+- **Failure Condition**: Checksum mismatch or load failure.
+- **Rollback Action**: Abort deployment. Inspect transfer corruption; do not proceed.
+
 ---
 
 ### Step 3: Verify Build Provenance & Image Hashes
-- **Action**: Record and audit SHA-256 digests of built images.
+- **Action**: Record and audit SHA-256 digests of built or loaded images.
 - **Runbook Command**:
   ```bash
   docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/api:v0.1.0-rc3
@@ -92,9 +116,9 @@ PROD_WORKER_INTERNAL_SECRET="<GENERATE_SECURE_RANDOM_SECRET>"
   - `zcc-api`: `sha256:d9b9d2afc7764e43220ae29594c89d22ceee95635a3575ccce28fc54440eb914`
   - `zcc-worker`: `sha256:ed0f7f709ea3f7df9d3cd2aeb3e760af587bc2a6ca00e725008b6d385c068828`
   - `zcc-web`: `sha256:a99a4412806128c2bfae70a3e3755a470a5262ead11369bdc558089a0131cec2`
-  *(Note: Recorded values represent local Docker Image IDs from daemon config hashes, `.Id`. Remote registry manifest digests `RepoDigests` are empty until published to an external OCI registry.)*
-- **Failure Condition**: Images corrupted or missing expected tags.
-- **Rollback Action**: Delete faulty images with `docker rmi`; rebuild from scratch.
+  *(Note: Recorded values represent local Docker Image IDs from daemon config hashes, `.Id`. Remote registry manifest digests `RepoDigests` are empty `[]` because images are distributed via local daemon/bundle without an external OCI registry.)*
+- **Failure Condition**: Images corrupted, mismatched image IDs, or missing expected tags.
+- **Rollback Action**: Delete faulty images with `docker rmi`; re-transfer or rebuild from scratch.
 
 ---
 
