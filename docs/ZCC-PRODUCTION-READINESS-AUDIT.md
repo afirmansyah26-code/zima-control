@@ -1,13 +1,13 @@
-# ZCC — Production Readiness Audit (Phase 9.1.6)
+# ZCC — Production Readiness Audit (Phase 9.1.7)
 
 | Metadata | Value |
 | :--- | :--- |
 | **Document** | Production Readiness Audit Report |
-| **Phase** | Phase 9.1.6 — Independent Linux Verification & Release Transfer Readiness |
+| **Phase** | Phase 9.1.7 — Release Provenance Closure & Bundle Portability Verification |
 | **Audit Status** | **NO-GO FOR IMMEDIATE DEPLOYMENT (READY WITH BLOCKERS — AWAITING INFRASTRUCTURE INPUTS & MAINTENANCE WINDOW)** |
 | **Audit Date** | 2026-10-15 |
 | **Baseline Release Commit** | `9a404956b31ce8274db8de7bac1626258f40c284` (`master`) |
-| **GitHub Remote Synchronized Commit** | `1cce160f9c6c0e7228c815a2a4b15c9839f36bcc` (`origin/master`) |
+| **GitHub Remote Synchronized Commit** | `7f7c946a2e2d401eb7bea5a1333bb25e54977c48` (`origin/master`) |
 | **Release Candidate Identifier** | `v0.1.0-rc3` |
 | **Image Bundle Checksum** | SHA-256 `a951c898cba6a82564fcd1ad8ec1d3266e25694ec79ce7e82782c8ff67d54520` (261,652,914 B) |
 | **Production Target (Reference Only)** | ZimaOS `10.10.0.28` — **STRICTLY UNTOUCHED / ZERO NETWORK CONTACT** |
@@ -26,7 +26,7 @@ Phase 9 executes a non-invasive, evidence-based **Production Readiness Audit** f
 The audit systematically evaluates whether the ZCC codebase, Docker container topology, storage mount mechanisms, security invariants, credential management, quality gates, and operational documentation are ready for production deployment onto ZimaOS (`10.10.0.28`).
 
 ### Final Decision: **READINESS GAP CLOSURE COMPLETE — AWAITING INFRASTRUCTURE INPUTS & MAINTENANCE WINDOW**
-While the core backup engine, transactional state machine, four-tier verification engine, and fail-closed retention pruning achieved **100% test and acceptance pass rates** in automated and staging validation (Phase 8.3 & 8.3.1), Phase 9.1 through 9.1.6 have systematically resolved all code, architectural, release artifact identity, independent verification, and security blockers:
+While the core backup engine, transactional state machine, four-tier verification engine, and fail-closed retention pruning achieved **100% test and acceptance pass rates** in automated and staging validation (Phase 8.3 & 8.3.1), Phase 9.1 through 9.1.7 have systematically resolved all code, architectural, release artifact identity, independent verification, and security blockers:
 
 1. **Release Artifact Identity & Freeze Blocker**: **RESOLVED**. Prior Phase 9.1.2 RC2 images used different image IDs from the Phase 9.1.3 rebuild despite reusing the tag `v0.1.0-rc2`. To eliminate release candidate artifact collision and establish immutable provenance, Phase 9.1.4 assigned **`v0.1.0-rc3`** as the new immutable release candidate identifier. Images were built from clean source commit `9a404956b31ce8274db8de7bac1626258f40c284` via frozen source archive `scratch/release-9a40495.tar.gz` (SHA-256 `582a7e78f49eacbc15373438b76c7f92832d5a17f265be42bb7c916b43a41767`). The staging `compose.yaml` pins `:v0.1.0-rc3`. Running containers were audited: zero `/app` patches exist in writable layers.
 2. **Container Filesystem Separation Blocker**: **RESOLVED**. Repository and staging `compose.yaml` mount `/DATA/.zcc-nas:/zcc-destinations:rslave,rw` **strictly into `zcc-worker`**. `zcc-api` and `zcc-web` have **zero NAS filesystem mounts**. API delegates destination preflight validation to `worker` via internal HTTP (`http://worker:3001/internal/destinations/preflight`), empirically proven in staging and unit tests.
@@ -34,9 +34,10 @@ While the core backup engine, transactional state machine, four-tier verificatio
 4. **Malformed JSON & Information Leak Sanitization**: **RESOLVED**. Worker internal server parses JSON strictly: invalid JSON syntax immediately returns generic HTTP 400 Bad Request (`{"error":"BAD_REQUEST","message":"Malformed or invalid JSON payload"}`), eliminating unhandled 500 parse exceptions. Invalid schemas, non-objects, arrays, missing destination fields, invalid `requiredBytes`, and unsupported types return 400. Unknown routes return 404; missing/invalid tokens return 401. Response sanitization was audited: zero stack traces, `SyntaxError`, tokens, or internal file paths are leaked in any error response.
 5. **Cross-Platform Quality Gate Blocker**: **RESOLVED**. Automated test suites achieved **100% pass rate** (`npm test` passes all tests across all workspaces; `npm run test:backup` passes 87/87; `npm --workspace=@zima-control-center/worker test` passes 24/24; `npm run typecheck` exits with 0 errors across all 21 workspaces; `npm run build` compiles cleanly).
 6. **Staging RC3 End-to-End Acceptance**: **PASS**. Synology NAS end-to-end backup validation on staging VM `192.168.56.101` succeeded running RC3 containers: preflight succeeded via authenticated worker internal delegation, backup jobs reached `COMPLETED` with `VERIFIED` artifact, and physical bundle and manifest were verified on the Synology share.
-7. **Production Documentation Distinction & Pending Infrastructure Inputs**: The distinction between client host and target NAS is explicit: `10.10.0.28` is the documented ZimaOS production host; `PROD_NAS_IP` and `PROD_NAS_EXPORT` remain `INPUT REQUIRED` until the infrastructure owner confirms the physical Synology NAS address and export path. NFS export permissions must be confirmed against client IP `10.10.0.28`. HTTPS reverse proxy / TLS certificate and the authorized maintenance window remain `INPUT REQUIRED`. Production `10.10.0.28` remains strictly untouched.
-8. **GitHub Provenance Synchronization**: **RESOLVED**. The repository was audited for secret hygiene, verified for clean linear ancestry, authorized by the repository owner, and pushed to GitHub `origin/master`. Both local and remote are 100% synchronized with clean working tree.
+7. **Production Documentation Distinction & Pending Infrastructure Inputs**: The distinction between client host and target NAS is explicit: `10.10.0.28` is the documented ZimaOS production host; `PROD_NAS_IP` and `PROD_NAS_EXPORT` remain `INPUT REQUIRED` until the infrastructure owner confirms the physical Synology NAS address and export path. NFS export permissions must be confirmed against client IP `10.10.0.28`. HTTPS reverse proxy / TLS certificate, strong bootstrap admin password, and the authorized maintenance window remain `INPUT REQUIRED`. Production `10.10.0.28` remains strictly untouched.
+8. **GitHub Provenance Synchronization**: **RESOLVED**. All release and documentation commits through `7f7c946` have been audited for secret hygiene, verified for clean linear ancestry, authorized by the repository owner, and pushed to GitHub `origin/master`. Both local and remote are 100% synchronized with clean working tree.
 9. **Independent Linux Verification & Release Transfer Readiness (Phase 9.1.6)**: **RESOLVED**. Clean checkout of source freeze commit `9a404956b31ce8274db8de7bac1626258f40c284` was executed on independent Debian 12 / Linux Kernel 6.18.9 container. Monorepo build and test dependency sequence was empirically validated: all quality gates passed 100% (`npm ci` exit 0, `npm run build` exit 0, `npm --workspace=@zima-control-center/worker test` 24/24 pass, `npm run test:backup` 87/87 pass, `npm test` 100% pass with 0 failures and 0 skips, `npm run typecheck` 0 errors). Docker Daemon image IDs of running staging containers match freeze records (`api`: `d9b9d2af...`, `worker`: `ed0f7f70...`, `web`: `a99a4412...`) with confirmed empty `RepoDigests: []`. The `docker save` image bundle (`zcc-v0.1.0-rc3-images.tar.gz`, SHA-256 `a951c898cba6a82564fcd1ad8ec1d3266e25694ec79ce7e82782c8ff67d54520`, 261,652,914 bytes) was generated in clean staging storage, verified via bit-for-bit secondary copy comparison, and documented with load runbook procedures. Production `10.10.0.28` remains 100% untouched.
+10. **Release Provenance Closure & Bundle Portability Audit (Phase 9.1.7)**: **RESOLVED**. Commit `7f7c946` was authorized and fast-forward pushed to GitHub `origin/master`. Release image bundle (`/DATA/release-artifacts/zcc-v0.1.0-rc3-images.tar.gz`, SHA-256 `a951c898cba6a82564fcd1ad8ec1d3266e25694ec79ce7e82782c8ff67d54520`, 261,652,914 B) was verified via `gzip -t` (stream intact, zero corruption). Internal archive `manifest.json` was extracted and audited: confirmed presence of all three images with exact Config hashes matching Docker daemon Image IDs (`api`: `d9b9d2af...`, `worker`: `ed0f7f70...`, `web`: `a99a4412...`). Bundle was loaded into Docker daemon via `docker load` and verified with 100% ID consistency. Operational boundary documented: no second staging host or second Docker daemon exists in the lab, so genuine cross-host network transfer validation has NOT yet been performed. Production `10.10.0.28` remains 100% untouched.
 
 ---
 
@@ -186,6 +187,39 @@ In Phase 9.1.6, artifact distribution mechanisms for production transfer were ev
    - Clarification: Local daemon image IDs (`api`: `d9b9d2af...`, `worker`: `ed0f7f70...`, `web`: `a99a4412...`) are distinct from registry manifest digests (`RepoDigests`), which remain empty (`[]`).
 5. **Production Isolation**:
    - **Zero Transfer to Production**: No release bundles or files were copied to `10.10.0.28`. All artifacts remain strictly staged on `192.168.56.101`.
+
+### 4.7 Release Provenance Closure & Bundle Portability Audit (Phase 9.1.7)
+In Phase 9.1.7, release provenance closure was completed and artifact bundle portability was audited:
+
+1. **GitHub Documentation Provenance Synchronization**:
+   - Authorized fast-forward push advanced GitHub `origin/master` from `1cce160` to `7f7c946` (`7f7c946a2e2d401eb7bea5a1333bb25e54977c48`).
+   - Remote documentation HEAD matches local `master` cleanly (`git status -sb` reports clean, zero divergence).
+   - Secret hygiene audit confirmed zero passwords, tokens, or private keys across all diffs.
+2. **Bundle Stream & Structural Integrity**:
+   - Bundle Path: `/DATA/release-artifacts/zcc-v0.1.0-rc3-images.tar.gz`
+   - Checksum Verification: `sha256sum` evaluated to exact expected hash `a951c898cba6a82564fcd1ad8ec1d3266e25694ec79ce7e82782c8ff67d54520` (261,652,914 bytes).
+   - Gzip Stream Integrity: `gzip -t` executed with **exit code 0 (`GZIP_TEST_OK`)**, proving zero compression corruptions or truncated trailing blocks.
+3. **Internal Archive Manifest & Image Audit**:
+   - Top-level `manifest.json` inside the tarball was extracted and audited:
+     - `zima-control-center/api:v0.1.0-rc3` -> Config: `blobs/sha256/d9b9d2afc7764e43220ae29594c89d22ceee95635a3575ccce28fc54440eb914`
+     - `zima-control-center/worker:v0.1.0-rc3` -> Config: `blobs/sha256/ed0f7f709ea3f7df9d3cd2aeb3e760af587bc2a6ca00e725008b6d385c068828`
+     - `zima-control-center/web:v0.1.0-rc3` -> Config: `blobs/sha256/a99a4412806128c2bfae70a3e3755a470a5262ead11369bdc558089a0131cec2`
+   - All 3 images are present and their internal Config hashes match the Docker daemon Image IDs with 100% precision.
+4. **Daemon Load Portability Verification**:
+   - Executed `docker load -i /DATA/release-artifacts/zcc-v0.1.0-rc3-images.tar.gz` on staging Docker daemon.
+   - Output confirmed clean load:
+     `Loaded image: zima-control-center/api:v0.1.0-rc3`
+     `Loaded image: zima-control-center/worker:v0.1.0-rc3`
+     `Loaded image: zima-control-center/web:v0.1.0-rc3`
+   - Post-load `docker inspect` verified exact Image IDs matching release records.
+5. **Honest Operational Boundary (Intra-Host Copy vs. Cross-Host Network Transfer)**:
+   - *Audit Finding*: The lab environment contains a single staging host (`192.168.56.101`). No approved secondary staging host or second Docker daemon exists.
+   - *Explicit Boundary Statement*: The file copy from `/DATA/release-artifacts/` to `/tmp/verify-bundle/` was an intra-host filesystem test. It proves filesystem durability and bit-level copy fidelity on `192.168.56.101`, but **does NOT constitute a cross-host network transfer test**.
+   - *Rollout Prerequisite*: Genuine cross-host network transfer verification is deferred to Step 2 (Path B) of the production rollout runbook during the scheduled maintenance window, where SHA-256 will be verified immediately upon transfer to `10.10.0.28` prior to issuing `docker load`.
+6. **Production Isolation Rule**:
+   - Zero packets transmitted to `10.10.0.28`.
+   - Zero transfer of bundle or manifest files to production.
+   - Physical Synology NAS 100% uncontacted.
 
 ---
 
@@ -476,13 +510,13 @@ The following production infrastructure parameters are **unconfirmed** and must 
 | :--- | :--- | :---: | :---: |
 | **Gate 1: Acceptance Completion** | Synology E2E acceptance suite passes on staging RC3 (Job `debd5ec3-cca8-4fbe-b6c4-439609d8d41f` COMPLETED & VERIFIED) | Verified | **PASS** |
 | **Gate 2: Quality Gates** | Full tests (530/530 passed, 1 skipped native), backup tests (87/87), worker tests (24/24), typecheck (0 errors), build clean | Verified | **PASS** |
-| **Gate 3: Release Reproducibility & Provenance** | RC3 images built from clean archive `9a40495`; synced to GitHub `f29ffd4`; zero writable layer diffs | Verified | **PASS** |
+| **Gate 3: Release Reproducibility & Provenance** | RC3 images built from clean archive `9a40495`; synced to GitHub `7f7c946`; bundle `a951c898...` verified (`gzip -t` OK, internal manifest matches daemon IDs, `docker load` OK); zero writable layer diffs | Verified | **PASS** |
 | **Gate 4: Container Security** | Network segmentation (`frontend`/`internal`), `WORKER_INTERNAL_SECRET` token authentication, malformed JSON 400 rejection, zero leak sanitization, API/Web zero NAS mounts, Worker unprivileged UID 1000 | Verified | **PASS** |
 | **Gate 5: Diagnostic Correctness** | Distinct error codes for malformed archive, stream truncation, and NAS I/O outage empirically verified | Verified | **PASS** |
 | **Gate 6: Transport Security** | Production HTTPS reverse proxy and secure cookie configuration documented | Awaiting Infra | **INPUT REQUIRED** |
 | **Gate 7: Production Inputs** | Physical Synology NAS IP, NFS export path, permissions, and network route verified | Unmet | **INPUT REQUIRED** |
 | **Gate 8: Rollback Readiness** | 5-level rollback runbook documented with verification commands | Ready | **PASS** |
-| **FINAL ROLLOUT DECISION** | **Code, Artifacts, GitHub Provenance & Architecture Verified; NO-GO FOR IMMEDIATE DEPLOYMENT until Production Infrastructure Inputs Confirmed** | **READY WITH BLOCKERS** | **AWAITING INPUTS** |
+| **FINAL ROLLOUT DECISION** | **Code, Artifacts, GitHub Provenance (7f7c946), Bundle Integrity & Architecture Verified; NO-GO FOR IMMEDIATE DEPLOYMENT until Production Infrastructure Inputs Confirmed** | **READY WITH BLOCKERS** | **AWAITING INPUTS (NO-GO)** |
 
 ---
 
@@ -509,7 +543,7 @@ All code, security, container topology, reproducible build, and quality blockers
 
 ---
 
-## 16. Phase 9.1 through 9.1.6 Readiness Gap Closure Audit & Resolution Log
+## 16. Phase 9.1 through 9.1.7 Readiness Gap Closure Audit & Resolution Log
 
 | Blocker ID | Description | Resolution Summary | Verification Method |
 | :--- | :--- | :--- | :--- |
@@ -526,3 +560,5 @@ All code, security, container topology, reproducible build, and quality blockers
 | **BLK-11** | **GitHub Remote Provenance Synchronization** | Reconciled 28 local commits (`c1b1c5b..f29ffd4`) with `origin/master`. Secret hygiene audit passed (zero secrets in 25,977 additions across 102 files). User authorized push. Remote fast-forward pushed to GitHub `f29ffd4023659aa5610b7a14e0da602a51135bfe`. Quality gates and staging RC3 acceptance re-verified with 100% pass rate. | `git push origin master` (clean 0 exit); `git status` up-to-date; full test suite (530 tests pass); staging backup job `debd5ec3`. |
 | **BLK-12** | **Independent Clean-Room Linux Verification** | Executed clean checkout of frozen commit `9a40495` on Debian 12 / Linux Kernel 6.18.9 container. Validated monorepo build dependency order. All automated quality gates passed with 100% success (`worker test` 24/24, `test:backup` 87/87, `npm test` 531/531, `typecheck` 0 errors, `build` clean). | Clean checkout in container on staging (`192.168.56.101`); zero test failures or skips. |
 | **BLK-13** | **Release Artifact Transfer Preparation** | Evaluated private OCI registry vs. Docker image bundle. Exported `docker save` compressed bundle `zcc-v0.1.0-rc3-images.tar.gz` (SHA-256 `a951c898cba6a82564fcd1ad8ec1d3266e25694ec79ce7e82782c8ff67d54520`, 261,652,914 B) to secret-free staging directory. Verified bit-for-bit secondary copy comparison (`VERIFIED_MATCH`). Created inventory manifest `zcc-v0.1.0-rc3-manifest.json`. Zero production network transfer. | `sha256sum` cross-path verification; manifest audit; zero production contact (`10.10.0.28`). |
+| **BLK-14** | **Release Provenance Closure & Bundle Portability Verification** | Verified GitHub synchronization of Phase 9.1.6 documentation at commit `7f7c946`. Audited release bundle `zcc-v0.1.0-rc3-images.tar.gz` (SHA-256 `a951c898...`), passing `gzip -t` stream test and manifest verification (3 images matching daemon Image IDs). Validated `docker load` execution on staging Docker daemon. Formally documented operational boundary distinguishing intra-host file copy from true cross-host network transfer, requiring cross-host transfer verification during the production maintenance window. Zero secrets leaked, zero production contact. | `git rev-parse HEAD origin/master`; `sha256sum`; `gzip -t`; tar manifest extraction; `docker load`; `docker inspect`. |
+

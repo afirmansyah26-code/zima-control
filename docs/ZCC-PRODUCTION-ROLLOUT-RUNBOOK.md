@@ -1,12 +1,12 @@
-# ZCC — Production Rollout & Rollback Runbook (Phase 9.1.6)
+# ZCC — Production Rollout & Rollback Runbook (Phase 9.1.7)
 
 | Metadata | Value |
 | :--- | :--- |
 | **Document** | Production Deployment & Rollback Runbook |
-| **Phase** | Phase 9.1.6 — Independent Linux Verification & Release Transfer Readiness |
+| **Phase** | Phase 9.1.7 — Release Provenance Closure & Bundle Portability Verification |
 | **Target Host (Reference Only)** | ZimaOS `10.10.0.28` (`ZimaCube`, Linux Kernel `6.18.9 x86_64`) |
 | **Release Baseline Commit** | `9a404956b31ce8274db8de7bac1626258f40c284` |
-| **GitHub Synchronized Documentation HEAD** | `1cce160f9c6c0e7228c815a2a4b15c9839f36bcc` (`origin/master`) |
+| **GitHub Synchronized Documentation HEAD** | `7f7c946a2e2d401eb7bea5a1333bb25e54977c48` (`origin/master`) |
 | **Release Candidate** | `v0.1.0-rc3` |
 | **Image Bundle Checksum** | SHA-256 `a951c898cba6a82564fcd1ad8ec1d3266e25694ec79ce7e82782c8ff67d54520` (261,652,914 B) |
 | **Prerequisite Audit** | `docs/ZCC-PRODUCTION-READINESS-AUDIT.md` |
@@ -101,6 +101,10 @@ PROD_WORKER_INTERNAL_SECRET="<GENERATE_SECURE_RANDOM_SECRET>"
   ```
 - **Failure Condition**: Checksum mismatch or load failure.
 - **Rollback Action**: Abort deployment. Inspect transfer corruption; do not proceed.
+
+> [!NOTE]
+> **Cross-Host Transfer Verification Requirement**:
+> In staging pre-verification (Phase 9.1.6 & 9.1.7), the artifact bundle was verified for stream integrity (`gzip -t`), manifest consistency, and local daemon loading via `docker load`. However, because no secondary staging host was provisioned in the lab, genuine cross-host network transfer validation remains unexecuted. During the scheduled maintenance window, the deployment engineer MUST compute `sha256sum` immediately upon copying the bundle onto the production host and ensure an exact match with the manifest before issuing `docker load`.
 
 ---
 
