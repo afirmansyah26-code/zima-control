@@ -1,11 +1,12 @@
-# ZCC — Production Rollout & Rollback Runbook (Phase 9.1.4)
+# ZCC — Production Rollout & Rollback Runbook (Phase 9.1.5)
 
 | Metadata | Value |
 | :--- | :--- |
 | **Document** | Production Deployment & Rollback Runbook |
-| **Phase** | Phase 9.1.4 — Release Artifact Freeze & Documentation Correction |
+| **Phase** | Phase 9.1.5 — GitHub Provenance Sync & Independent Release Verification |
 | **Target Host (Reference Only)** | ZimaOS `10.10.0.28` (`ZimaCube`, Linux Kernel `6.18.9 x86_64`) |
 | **Release Baseline Commit** | `9a404956b31ce8274db8de7bac1626258f40c284` |
+| **GitHub Synchronized Commit** | `f29ffd4023659aa5610b7a14e0da602a51135bfe` (`origin/master`) |
 | **Prerequisite Audit** | `docs/ZCC-PRODUCTION-READINESS-AUDIT.md` |
 | **Destination Technical Design** | `docs/ZCC-SYNOLOGY-DESTINATION-DESIGN.md` |
 | **Authoritative Architecture** | `docs/ZCC-PRODUCT-ARCHITECTURE-AND-SCOPE.md` |
@@ -13,7 +14,7 @@
 
 > [!WARNING]
 > **OPERATIONAL NOTICE**:
-> This runbook is a **planned operational specification**. In accordance with Phase 9.1.4 constraints, **NO COMMANDS in this runbook were executed against production (`10.10.0.28`)**.
+> This runbook is a **planned operational specification**. In accordance with Phase 9.1.5 constraints, **NO COMMANDS in this runbook were executed against production (`10.10.0.28`)**.
 > Execution of this runbook requires formal resolution of all audit blockers and a signed GO decision.
 
 ---
@@ -87,10 +88,11 @@ PROD_WORKER_INTERNAL_SECRET="<GENERATE_SECURE_RANDOM_SECRET>"
   docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/worker:v0.1.0-rc3
   docker inspect --format '{{.Id}} {{.RepoTags}}' zima-control-center/web:v0.1.0-rc3
   ```
-- **Expected Result**: Image digests match build manifest; zero runtime diffs:
+- **Expected Result**: Docker image IDs match build manifest; zero runtime diffs:
   - `zcc-api`: `sha256:d9b9d2afc7764e43220ae29594c89d22ceee95635a3575ccce28fc54440eb914`
   - `zcc-worker`: `sha256:ed0f7f709ea3f7df9d3cd2aeb3e760af587bc2a6ca00e725008b6d385c068828`
   - `zcc-web`: `sha256:a99a4412806128c2bfae70a3e3755a470a5262ead11369bdc558089a0131cec2`
+  *(Note: Recorded values represent local Docker Image IDs from daemon config hashes, `.Id`. Remote registry manifest digests `RepoDigests` are empty until published to an external OCI registry.)*
 - **Failure Condition**: Images corrupted or missing expected tags.
 - **Rollback Action**: Delete faulty images with `docker rmi`; rebuild from scratch.
 
